@@ -71,7 +71,7 @@ def _resolve_azure_foundry_runtime(*, requested_provider: str, model_cfg: Dict[s
     explicit_api_key = str(explicit_api_key or "").strip()
     explicit_base_url_clean = str(explicit_base_url or "").strip().rstrip("/")
     cfg_base_url, cfg_api_mode, cfg_auth_mode, cfg_entra = "", "chat_completions", "api_key", {}
-    if rp._cfg_provider(model_cfg) == "azure-foundry":
+    if rp._cfg_provider_canonical(model_cfg) == "azure-foundry":
         cfg_base_url = rp._config_base_url_for_provider(model_cfg, "azure-foundry")
         cfg_api_mode = rp._parse_api_mode(model_cfg.get("api_mode")) or "chat_completions"
         cfg_auth_mode = str(model_cfg.get("auth_mode") or "api_key").strip().lower() or "api_key"

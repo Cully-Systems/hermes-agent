@@ -470,6 +470,7 @@ _PROVIDER_ALIASES = dict((
     ("lm_studio", "lmstudio"),
     ("ollama", "custom"),  # bare "ollama" = local; use "ollama-cloud" for cloud
     ("ollama_cloud", "ollama-cloud"),
+    ("azure", "azure-foundry"), ("azure-ai-foundry", "azure-foundry"), ("azure-ai", "azure-foundry"),
 ))
 
 

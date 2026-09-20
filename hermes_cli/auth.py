@@ -286,6 +286,13 @@ try:
     for _pp in _list_providers_for_registry():
         if _pp.name not in PROVIDER_REGISTRY:
             _register_plugin_provider(_pp)
+        else:
+            # Hardcoded rows skip _register_plugin_provider, so plugin aliases
+            # (azure → azure-foundry) never landed on PROVIDER_REGISTRY. A lookup
+            # keyed on the alias then looks like "no adapter registered".
+            pconfig = PROVIDER_REGISTRY[_pp.name]
+            for alias in _pp.aliases:
+                PROVIDER_REGISTRY.setdefault(alias, pconfig)
 except Exception:
     pass
 
@@ -1281,7 +1288,8 @@ _PROVIDER_ALIASES: Dict[str, str] = {
     # Local server aliases — route through the generic custom provider
     "ollama": "custom", "ollama_cloud": "ollama-cloud",
     "vllm": "custom", "llamacpp": "custom",
-    "llama.cpp": "custom", "llama-cpp": "custom"}
+    "llama.cpp": "custom", "llama-cpp": "custom",
+    "azure": "azure-foundry", "azure-ai-foundry": "azure-foundry", "azure-ai": "azure-foundry"}
 
 
 def _plugin_aliases() -> Dict[str, str]:

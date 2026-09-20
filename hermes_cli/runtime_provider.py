@@ -249,10 +249,21 @@ def _cfg_provider(model_cfg: Dict[str, Any]) -> str:
     return str(model_cfg.get("provider") or "").strip().lower()
 
 
+def _cfg_provider_canonical(model_cfg: Dict[str, Any]) -> str:
+    """``model.provider`` resolved through plugin + hardcoded aliases (azure → azure-foundry)."""
+    raw = _cfg_provider(model_cfg)
+    return auth_mod._plugin_aliases().get(raw, raw)
+
+
 def _config_base_url_for_provider(model_cfg: Dict[str, Any], provider: str) -> str:
     """``model.base_url`` (stripped, no trailing slash) only when ``model.provider`` is
     ``provider`` — a stale base_url must not leak into another provider."""
-    return str(model_cfg.get("base_url") or "").strip().rstrip("/") if _cfg_provider(model_cfg) == provider else ""
+    provider_canon = auth_mod._plugin_aliases().get(provider, provider)
+    return (
+        str(model_cfg.get("base_url") or "").strip().rstrip("/")
+        if _cfg_provider_canonical(model_cfg) == provider_canon
+        else ""
+    )
 
 
 def _anthropic_base_url_override_ok(base_url: str) -> bool:
@@ -443,7 +454,7 @@ def _pool_entry_mode_and_url(provider, entry, model_cfg, effective_model, base_u
         return api_mode, base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
     if provider == "azure-foundry":
         api_mode = "chat_completions"
-        if _cfg_provider(model_cfg) == "azure-foundry":
+        if _cfg_provider_canonical(model_cfg) == "azure-foundry":
             base_url = _config_base_url_for_provider(model_cfg, "azure-foundry") or base_url
             api_mode = _parse_api_mode(model_cfg.get("api_mode")) or api_mode
         api_mode = _azure_inferred_api_mode(effective_model, api_mode)
@@ -766,7 +777,11 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
                         requested_provider=requested_provider)
     # Azure Foundry resolves before the custom-runtime / pool / generic paths so its config is
     # always picked up from model.base_url + model.api_mode, with or without explicit_* args.
-    if requested_provider == "azure-foundry":
+    # Plugin aliases (azure, azure-ai-foundry, azure-ai) must take the same dedicated
+    # resolver as the canonical id. resolve_requested_provider() does not canonicalize,
+    # so a config of provider: azure previously skipped this shortcut and fell through
+    # to the generic api_key path (empty Foundry base_url → "no adapter" / AuthError).
+    if auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry":
         return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=_get_model_config(),
                                               explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
                                               target_model=target_model)
