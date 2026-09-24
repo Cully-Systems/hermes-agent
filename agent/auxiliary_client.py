@@ -2753,10 +2753,10 @@ def _try_azure_foundry(
     *, model: Optional[str] = None, explicit_api_key: Optional[str] = None,
     explicit_base_url: Optional[str] = None, api_mode: Optional[str] = None,
 ) -> Tuple[Optional[Any], Optional[str]]:
-    """Azure Foundry aux client via the main agent's ``_resolve_azure_foundry_runtime`` (api_key vs Entra
+    """Azure Foundry aux client via the main runtime resolver (credential pool, api_key vs Entra
     callable bearer, per-model api_mode, base_url overrides). Returns ``(client, model)`` or ``(None, None)``."""
     try:
-        from hermes_cli.runtime_provider import _resolve_azure_foundry_runtime
+        from hermes_cli.runtime_provider import resolve_runtime_provider
         from hermes_cli.auth import AuthError
         from hermes_cli.config import load_config_readonly
     except ImportError:
@@ -2769,8 +2769,8 @@ def _try_azure_foundry(
     except Exception:
         model_cfg = {}
     try:
-        runtime = _resolve_azure_foundry_runtime(
-            requested_provider="azure-foundry", model_cfg=model_cfg,
+        runtime = resolve_runtime_provider(
+            requested="azure-foundry",
             explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
             target_model=model,
         )

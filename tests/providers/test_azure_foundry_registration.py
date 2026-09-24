@@ -124,3 +124,20 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     })
     assert rp._resolve_requested_shortcuts("azure-foundry", None, None, None) is foundry_runtime
     assert len(pool_calls) == calls_before
+
+    # Auxiliary calls share the main resolver so canonical pool credentials are
+    # available for title/compression/vision requests as well as main chat.
+    monkeypatch.setattr(config, "load_config_readonly", lambda: {
+        "model": {"provider": "openai", "auth_mode": "api_key", "default": "deployment"},
+    })
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {
+        "provider": "openai", "auth_mode": "api_key", "default": "deployment",
+    })
+    monkeypatch.setattr(rp, "resolve_runtime_provider", lambda **kwargs: rp._resolve_requested_shortcuts(
+        kwargs["requested"], kwargs["explicit_api_key"], kwargs["explicit_base_url"], kwargs["target_model"],
+    ))
+    monkeypatch.setattr(aux, "_create_openai_client", lambda **kwargs: kwargs)
+    client, model = aux._try_azure_foundry(model="deployment")
+    assert client["api_key"] == "pool-key"
+    assert client["base_url"] == pooled["base_url"]
+    assert model == "deployment"
