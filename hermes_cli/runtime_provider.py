@@ -250,15 +250,17 @@ def _cfg_provider(model_cfg: Dict[str, Any]) -> str:
 
 
 def _cfg_provider_canonical(model_cfg: Dict[str, Any]) -> str:
-    """``model.provider`` resolved through plugin + hardcoded aliases (azure → azure-foundry)."""
+    """Canonical model provider unless the raw name intentionally owns a named custom provider."""
     raw = _cfg_provider(model_cfg)
+    if raw and has_named_custom_provider(raw):
+        return raw
     return auth_mod._plugin_aliases().get(raw, raw)
 
 
 def _config_base_url_for_provider(model_cfg: Dict[str, Any], provider: str) -> str:
     """``model.base_url`` (stripped, no trailing slash) only when ``model.provider`` is
     ``provider`` — a stale base_url must not leak into another provider."""
-    provider_canon = auth_mod._plugin_aliases().get(provider, provider)
+    provider_canon = provider if has_named_custom_provider(provider) else auth_mod._plugin_aliases().get(provider, provider)
     return (
         str(model_cfg.get("base_url") or "").strip().rstrip("/")
         if _cfg_provider_canonical(model_cfg) == provider_canon
@@ -846,7 +848,7 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     requested_provider = resolve_requested_provider(requested)
     _raise_if_provider_disabled(requested_provider)
     canonical_provider = auth_mod._plugin_aliases().get(requested_provider, requested_provider)
-    if canonical_provider != requested_provider:
+    if canonical_provider != requested_provider and not has_named_custom_provider(requested_provider):
         _raise_if_provider_disabled(canonical_provider)
     return next(r for r in _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, target_model) if r)
 
