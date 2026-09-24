@@ -33,10 +33,16 @@ def _azure_current(config) -> _AzureCurrent:
     model_cfg = config.get("model", {})
     provider = str(model_cfg.get("provider") or "").strip().lower() if isinstance(model_cfg, dict) else ""
     try:
-        from hermes_cli.auth import _plugin_aliases
-        provider = _plugin_aliases().get(provider, provider)
+        from hermes_cli.runtime_provider import has_named_custom_provider
+        is_named_custom = has_named_custom_provider(provider)
     except Exception:
-        pass
+        is_named_custom = False
+    if not is_named_custom:
+        try:
+            from hermes_cli.auth import _plugin_aliases
+            provider = _plugin_aliases().get(provider, provider)
+        except Exception:
+            pass
     if isinstance(model_cfg, dict) and provider == "azure-foundry":
         cur.base_url = str(model_cfg.get("base_url", "") or "")
         cur.api_mode = str(model_cfg.get("api_mode", "") or "")

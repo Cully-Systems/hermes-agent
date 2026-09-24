@@ -238,6 +238,10 @@ def _validate_model_config(config_path, issues: list) -> None:
             provider_def = resolve_full(provider, cfg.get("providers"), custom_providers)
             catalog_provider = provider_def.id if provider_def is not None else None
             accept.update({catalog_provider} - {None})
+            # The user-configured endpoint matched the raw provider name before
+            # plugin aliases. Keep that custom identity for auth checks too.
+            if provider_def is not None and provider_def.source == "user-config":
+                runtime_provider = provider_def.id
     if provider and provider != "auto" and (catalog_provider is None or (known_providers and not (accept & valid_provider_ids))):
         known_list = ", ".join(sorted(known_providers)) if known_providers else "(unavailable)"
         _fail_and_issue(f"model.provider '{provider_raw}' is not a recognised provider", f"(known: {known_list})",
