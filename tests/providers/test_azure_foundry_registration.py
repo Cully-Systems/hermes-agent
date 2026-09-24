@@ -27,7 +27,7 @@ def test_azure_foundry_registration_aliases_and_pool_runtime(monkeypatch, tmp_pa
     assert cfg.id == "azure-foundry"
     for alias in _AZURE_FOUNDRY_ALIASES:
         assert get_provider_profile(alias) is profile
-        assert alias not in auth.PROVIDER_REGISTRY
+        assert auth.PROVIDER_REGISTRY[alias] is cfg
         assert auth.resolve_provider(alias) == "azure-foundry"
         assert auth_commands._normalize_provider(alias) == "azure-foundry"
 
@@ -100,3 +100,27 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
         None,
     )
     assert detected not in {"copilot", "github", "github-copilot"}
+
+    # A stale Entra mode must not suppress the canonical pool after the user switches
+    # away from Foundry. When Foundry remains selected, Entra keeps its token path.
+    pooled = {"provider": "azure-foundry", "api_key": "pool-key", "source": "manual",
+              "base_url": "https://example.openai.azure.com/v1"}
+    pool_calls = []
+    monkeypatch.setattr(rp, "has_named_custom_provider", lambda _provider: False)
+    monkeypatch.setattr(rp, "_resolve_from_pool", lambda *args: pool_calls.append(args) or pooled)
+    foundry_runtime = {"provider": "azure-foundry", "source": "entra"}
+    monkeypatch.setattr(rp, "_resolve_azure_foundry_runtime", lambda **_kwargs: foundry_runtime)
+
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {
+        "provider": "openai", "auth_mode": "entra_id", "base_url": "https://example.openai.azure.com/v1",
+    })
+    assert rp._resolve_requested_shortcuts("azure-foundry", None, None, None) is pooled
+    assert pool_calls[-1][0] == "azure-foundry"
+
+    calls_before = len(pool_calls)
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {
+        "provider": "azure-foundry", "auth_mode": "entra_id",
+        "base_url": "https://example.openai.azure.com/v1",
+    })
+    assert rp._resolve_requested_shortcuts("azure-foundry", None, None, None) is foundry_runtime
+    assert len(pool_calls) == calls_before
