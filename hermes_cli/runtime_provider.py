@@ -781,7 +781,10 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
     # resolver as the canonical id. resolve_requested_provider() does not canonicalize,
     # so a config of provider: azure previously skipped this shortcut and fell through
     # to the generic api_key path (empty Foundry base_url → "no adapter" / AuthError).
-    if auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry":
+    if (
+        auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry"
+        and not has_named_custom_provider(requested_provider)
+    ):
         return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=_get_model_config(),
                                               explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
                                               target_model=target_model)
