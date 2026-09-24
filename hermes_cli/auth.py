@@ -1383,12 +1383,17 @@ def _env_key_auto_detected(
     scoped_key_env: Callable[[str], str], oauth_active: Optional[str]) -> Optional[str]:
     """First registry api_key provider (registry order) with a usable env key, warning when it
     preempts a logged-in OAuth provider so a stale key in ~/.hermes/.env never switches silently."""
+    seen_provider_ids = set()
     for pid, pconfig in PROVIDER_REGISTRY.items():
-        if pconfig.auth_type != "api_key" or pid in _NO_AUTO_DETECT_PROVIDERS:
+        canonical_id = pconfig.id
+        if canonical_id in seen_provider_ids:
+            continue
+        seen_provider_ids.add(canonical_id)
+        if pconfig.auth_type != "api_key" or canonical_id in _NO_AUTO_DETECT_PROVIDERS:
             continue
         for env_var in pconfig.api_key_env_vars:
             if has_usable_secret(scoped_key_env(env_var)):
-                if oauth_active and oauth_active != pid:
+                if oauth_active and oauth_active != canonical_id:
                     logger.warning(
                         # An exported API key now wins over a logged-in OAuth provider (the #29285 fix).
                         # Surface that so a user who deliberately uses OAuth but has a stale key in
@@ -1397,8 +1402,8 @@ def _env_key_auto_detected(
                         "logged-in OAuth provider %r. If you meant to use the "
                         "OAuth login, unset %s or set `model.provider` "
                         "explicitly.",
-                        pid, env_var, oauth_active, env_var)
-                return pid
+                        canonical_id, env_var, oauth_active, env_var)
+                return canonical_id
     return None
 
 
