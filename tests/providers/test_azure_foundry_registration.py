@@ -23,9 +23,10 @@ def test_azure_foundry_registration_aliases_and_runtime(monkeypatch):
     assert profile.auth_type == "api_key"
 
     cfg = auth.PROVIDER_REGISTRY["azure-foundry"]
+    assert cfg.id == "azure-foundry"
     for alias in _AZURE_FOUNDRY_ALIASES:
         assert get_provider_profile(alias) is profile
-        assert auth.PROVIDER_REGISTRY[alias] is cfg
+        assert alias not in auth.PROVIDER_REGISTRY
         assert auth.resolve_provider(alias) == "azure-foundry"
         assert auth_commands._normalize_provider(alias) == "azure-foundry"
 
