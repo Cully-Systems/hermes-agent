@@ -696,7 +696,7 @@ def _fast_model_from_catalog(provider_id: str) -> str:
         # model" and pin the curated default forever.
         api_key, base_url = "", ""
         try:
-            creds = resolve_api_key_provider_credentials(canonical_id) or {}
+            creds = resolve_api_key_provider_credentials(provider_id) or {}
             api_key = str(creds.get("api_key", "")).strip()
             base_url = str(creds.get("base_url", "")).strip()
         except Exception:
