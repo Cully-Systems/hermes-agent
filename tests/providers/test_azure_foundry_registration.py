@@ -5,18 +5,19 @@ Keep this fix to two behavior-level tests per repository policy.
 
 from __future__ import annotations
 
-import pytest
+import uuid
+
+from agent.credential_pool import AUTH_TYPE_API_KEY, SOURCE_MANUAL, PooledCredential, load_pool
+from agent.transports import get_transport
+from hermes_cli import auth, auth_commands, config
+from hermes_cli import runtime_provider as rp
+from providers import get_provider_profile
+
 
 _AZURE_FOUNDRY_ALIASES = ("azure", "azure-ai-foundry", "azure-ai")
 
 
-def test_azure_foundry_registration_aliases_and_runtime(monkeypatch):
-    from agent.transports import get_transport
-    from hermes_cli import auth
-    from hermes_cli import auth_commands
-    from hermes_cli import runtime_provider as rp
-    from providers import get_provider_profile
-
+def test_azure_foundry_registration_aliases_and_pool_runtime(monkeypatch, tmp_path):
     profile = get_provider_profile("azure-foundry")
     assert profile is not None
     assert profile.name == "azure-foundry"
@@ -30,30 +31,35 @@ def test_azure_foundry_registration_aliases_and_runtime(monkeypatch):
         assert auth.resolve_provider(alias) == "azure-foundry"
         assert auth_commands._normalize_provider(alias) == "azure-foundry"
 
-    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "az-test-key")
-    monkeypatch.setattr(
-        rp,
-        "_get_model_config",
-        lambda: {
-            "provider": "azure",
-            "base_url": "https://example.openai.azure.com/openai/v1",
-            "api_mode": "chat_completions",
-            "default": "DeepSeek-R1",
-        },
-    )
-    monkeypatch.setattr(rp, "load_pool", lambda provider: None)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {
+        "provider": "azure", "base_url": "https://example.openai.azure.com/openai/v1",
+        "api_mode": "chat_completions", "default": "DeepSeek-R1",
+    })
+    load_pool("azure-foundry").add_entry(PooledCredential(
+        provider="azure-foundry", id=uuid.uuid4().hex[:6], label="api-key-1", auth_type=AUTH_TYPE_API_KEY,
+        priority=0, source=SOURCE_MANUAL, access_token="az-pool-key",
+    ))
 
     resolved = rp.resolve_runtime_provider(requested="azure")
     assert resolved["provider"] == "azure-foundry"
-    assert resolved["api_mode"] == "chat_completions"
-    assert resolved["api_key"] == "az-test-key"
+    assert resolved["api_key"] == "az-pool-key"
+    assert resolved["source"] == "manual"
+    assert resolved["base_url"] == "https://example.openai.azure.com/openai/v1"
     assert get_transport(resolved["api_mode"]) is not None
 
 
 def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusions(monkeypatch):
     from agent import auxiliary_client as aux
-    from hermes_cli import auth
-    from hermes_cli import runtime_provider as rp
+
+    monkeypatch.setattr(config, "load_config", lambda: {"model": {"provider": "azure"}})
+    assert auth._config_model_provider()[1] == "azure-foundry"
+    monkeypatch.setattr(config, "load_config", lambda: {
+        "model": {"provider": "azure"},
+        "providers": {"azure": {"base_url": "https://custom.example/v1", "api_key": "custom-key"}},
+    })
+    assert auth._config_model_provider()[1] == "custom"
 
     custom = {
         "name": "azure",
@@ -62,11 +68,7 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
         "model": "custom-model",
     }
     monkeypatch.setattr(rp, "has_named_custom_provider", lambda provider: provider == "azure")
-    monkeypatch.setattr(
-        rp._config_mod,
-        "load_config",
-        lambda: {"providers": {"azure-foundry": {"enabled": False}}},
-    )
+    monkeypatch.setattr(rp._config_mod, "load_config", lambda: {"providers": {"azure-foundry": {"enabled": False}}})
     expected = {
         "provider": "custom",
         "api_mode": "chat_completions",
@@ -76,8 +78,7 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     monkeypatch.setattr(rp, "_ladder_rungs", lambda *_args, **_kwargs: iter([expected]))
     assert rp.resolve_runtime_provider(requested="azure") is expected
     assert rp._config_base_url_for_provider(
-        {"provider": "azure", "base_url": custom["base_url"]},
-        "azure-foundry",
+        {"provider": "azure", "base_url": custom["base_url"]}, "azure-foundry"
     ) == ""
 
     monkeypatch.setattr(aux, "_read_main_provider", lambda: "azure")

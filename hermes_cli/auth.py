@@ -1362,7 +1362,20 @@ def _config_model_provider() -> Tuple[Any, Optional[str]]:
         model_cfg = (load_config() or {}).get("model")
         provider = model_cfg.get("provider") if isinstance(model_cfg, dict) else None
         provider = provider.strip().lower() if isinstance(provider, str) else ""
-        return model_cfg, (provider if provider in PROVIDER_REGISTRY else None)
+        canonical = _plugin_aliases().get(provider, provider)
+        if canonical != provider and canonical in PROVIDER_REGISTRY:
+            # Named custom providers intentionally win when their name collides with a built-in
+            # alias. Keep the auto-resolution safety path consistent with runtime routing.
+            try:
+                from hermes_cli.runtime_provider import has_named_custom_provider
+                if has_named_custom_provider(provider):
+                    return model_cfg, "custom"
+            except Exception as e:
+                logger.debug("Could not check custom-provider alias shadowing: %s", e)
+            return model_cfg, canonical
+        if provider in PROVIDER_REGISTRY:
+            return model_cfg, provider
+        return model_cfg, None
     except Exception as e:
         logger.debug("Could not read config.yaml model.provider for auto-resolution: %s", e)
         return None, None

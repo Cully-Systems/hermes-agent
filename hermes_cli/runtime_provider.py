@@ -787,7 +787,17 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
         auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry"
         and not has_named_custom_provider(requested_provider)
     ):
-        return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=_get_model_config(),
+        model_cfg = _get_model_config()
+        # `hermes auth add azure` stores credentials under the canonical Foundry pool. The
+        # shortcut normally runs before the generic pool rung, so select that entry here.
+        # Entra ID is an explicit auth-mode choice and must continue to use its token path.
+        auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
+        if auth_mode != "entra_id" and not explicit_api_key and not explicit_base_url:
+            pooled = _resolve_from_pool("azure-foundry", requested_provider, model_cfg, explicit_api_key,
+                                        explicit_base_url, target_model)
+            if pooled:
+                return pooled
+        return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=model_cfg,
                                               explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
                                               target_model=target_model)
     if requested_provider in _VERTEX_NAMES:
