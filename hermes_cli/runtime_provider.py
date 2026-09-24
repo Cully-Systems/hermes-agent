@@ -797,9 +797,12 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
                                         explicit_base_url, target_model)
             if pooled:
                 if not str(pooled.get("base_url") or "").strip():
-                    env_base_url = str(os.getenv("AZURE_FOUNDRY_BASE_URL") or "").strip().rstrip("/")
+                    env_base_url = _getenv("AZURE_FOUNDRY_BASE_URL", "").strip().rstrip("/")
                     if env_base_url:
-                        pooled["base_url"] = env_base_url
+                        pooled["base_url"] = (
+                            re.sub(r"/v1/?$", "", env_base_url)
+                            if pooled.get("api_mode") == "anthropic_messages" else env_base_url
+                        )
                 if str(pooled.get("base_url") or "").strip():
                     return pooled
                 return _resolve_azure_foundry_runtime(

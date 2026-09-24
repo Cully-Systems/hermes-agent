@@ -950,7 +950,7 @@ def _has_any_provider_configured(*, strict_profile_scope: bool = False) -> bool:
     make it appear ready. Unscoped callers keep the legacy behavior.
     """
     from hermes_cli.config import DEFAULT_CONFIG, get_env_path, get_hermes_home, load_config
-    from hermes_cli.auth import PROVIDER_REGISTRY, get_auth_status
+    from hermes_cli.auth import PROVIDER_REGISTRY, get_auth_status, iter_unique_provider_configs
 
     cfg = load_config()
     model_cfg = cfg.get("model")
@@ -974,7 +974,7 @@ def _has_any_provider_configured(*, strict_profile_scope: bool = False) -> bool:
         "ANTHROPIC_TOKEN",
         "OPENAI_BASE_URL",
     }
-    for pconfig in PROVIDER_REGISTRY.values():
+    for pconfig in iter_unique_provider_configs():
         if pconfig.auth_type == "api_key":
             provider_env_vars.update(pconfig.api_key_env_vars)
     if strict_profile_scope:
@@ -1006,7 +1006,8 @@ def _has_any_provider_configured(*, strict_profile_scope: bool = False) -> bool:
         try:
             if any(
                 get_auth_status(pid).get("logged_in")
-                for pid, pconfig in PROVIDER_REGISTRY.items()
+                for pconfig in iter_unique_provider_configs()
+                for pid in (pconfig.id,)
                 if pconfig.auth_type == "api_key"
             ):
                 return True

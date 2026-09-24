@@ -1065,6 +1065,39 @@ class TestAzureFoundryResolution:
             "default": "gpt-4.1",
         }
 
+    @pytest.mark.parametrize(
+        ("api_mode", "scoped_url", "expected_url"),
+        [
+            ("chat_completions", "https://profile.azure.com/openai/v1", "https://profile.azure.com/openai/v1"),
+            ("anthropic_messages", "https://profile.azure.com/openai/v1", "https://profile.azure.com/openai"),
+        ],
+    )
+    def test_pooled_foundry_uses_scoped_env_endpoint_and_normalizes_it(
+        self, monkeypatch, api_mode, scoped_url, expected_url
+    ):
+        """Pooled keys use the selected profile's endpoint and Anthropic path shape."""
+        monkeypatch.setenv("AZURE_FOUNDRY_BASE_URL", "https://default-profile.azure.com/openai/v1")
+        monkeypatch.setattr(
+            rp, "_getenv",
+            lambda name, default="": scoped_url if name == "AZURE_FOUNDRY_BASE_URL" else default,
+        )
+        monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "azure-foundry")
+        monkeypatch.setattr(rp, "_get_model_config", lambda: self._make_cfg("", api_mode))
+
+        entry = SimpleNamespace(access_token="pooled-foundry-key", source="manual", base_url="")
+        pool = SimpleNamespace(
+            provider="azure-foundry",
+            has_credentials=lambda: True,
+            select=lambda: entry,
+        )
+        monkeypatch.setattr(rp, "load_pool", lambda _provider: pool)
+
+        resolved = rp.resolve_runtime_provider(requested="azure-foundry")
+
+        assert resolved["api_key"] == "pooled-foundry-key"
+        assert resolved["base_url"] == expected_url
+        assert resolved["credential_pool"] is pool
+
 
     def test_azure_foundry_missing_base_url_raises(self, monkeypatch):
         monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "az-key")

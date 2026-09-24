@@ -20,14 +20,14 @@ __all__ = [
 def _providers_for_env_var(env_var: str) -> List[str]:
     """Provider ids whose registered api_key_env_vars include ``env_var``."""
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
+        from hermes_cli.auth import iter_unique_provider_configs
     except Exception:
         return []
     hits: List[str] = []
-    for pid, cfg in PROVIDER_REGISTRY.items():
+    for cfg in iter_unique_provider_configs():
         try:
             if env_var in (cfg.api_key_env_vars or ()):
-                hits.append(pid)
+                hits.append(cfg.id)
         except Exception:
             continue
     return hits

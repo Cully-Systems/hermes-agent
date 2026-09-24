@@ -265,30 +265,40 @@ def _register_plugin_provider(pp: Any) -> None:
 
     External-process (ACP) providers have no API-key env vars; registering them is what lets an
     out-of-tree provider pass ``resolve_provider()``'s known-provider gate ("Unknown provider")."""
-    if pp.auth_type == "external_process":
-        pconfig = ProviderConfig(
-            pp.name, pp.display_name or pp.name, "external_process", inference_base_url=pp.base_url)
-    elif pp.auth_type == "api_key" and pp.env_vars and pp.name not in _REGISTRY_PLUGIN_SKIP:
-        is_url = lambda v: v.endswith("_BASE_URL") or v.endswith("_URL")  # noqa: E731
-        pconfig = _api_key_provider(
-            pp.name, pp.display_name or pp.name, pp.base_url,
-            tuple(v for v in pp.env_vars if not is_url(v)) or pp.env_vars,
-            next((v for v in pp.env_vars if is_url(v)), None) or "")
-    else:
-        return
+    pconfig = PROVIDER_REGISTRY.get(pp.name)
+    if pconfig is None:
+        if pp.auth_type == "external_process":
+            pconfig = ProviderConfig(
+                pp.name, pp.display_name or pp.name, "external_process", inference_base_url=pp.base_url)
+        elif pp.auth_type == "api_key" and pp.env_vars and pp.name not in _REGISTRY_PLUGIN_SKIP:
+            is_url = lambda v: v.endswith("_BASE_URL") or v.endswith("_URL")  # noqa: E731
+            pconfig = _api_key_provider(
+                pp.name, pp.display_name or pp.name, pp.base_url,
+                tuple(v for v in pp.env_vars if not is_url(v)) or pp.env_vars,
+                next((v for v in pp.env_vars if is_url(v)), None) or "")
+        else:
+            return
     PROVIDER_REGISTRY[pp.name] = pconfig
+    # Preserve the long-standing public lookup contract for plugin aliases.
+    # Identity-sensitive scans use iter_unique_provider_configs() below.
+    for alias in pp.aliases:
+        PROVIDER_REGISTRY.setdefault(alias, pconfig)
+
+
+def iter_unique_provider_configs():
+    """Iterate canonical provider configs once, even when plugin aliases are registered."""
+    seen = set()
+    for pconfig in PROVIDER_REGISTRY.values():
+        if pconfig.id in seen:
+            continue
+        seen.add(pconfig.id)
+        yield pconfig
 
 
 try:
     from providers import list_providers as _list_providers_for_registry
     for _pp in _list_providers_for_registry():
-        if _pp.name not in PROVIDER_REGISTRY:
-            _register_plugin_provider(_pp)
-        else:
-            # Registry identity remains canonical-only. Alias resolution belongs
-            # to _plugin_aliases() so identity-sensitive scans never duplicate
-            # credential pools, health state, or setup decisions.
-            pass
+        _register_plugin_provider(_pp)
 except Exception:
     pass
 

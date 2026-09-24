@@ -54,11 +54,17 @@ def fake_cli(tmp_path, monkeypatch):
 
 
 def test_an_out_of_tree_external_process_provider_resolves_end_to_end(fake_cli, monkeypatch):
-    from hermes_cli.auth import PROVIDER_REGISTRY, resolve_external_process_provider_credentials, resolve_provider
+    from hermes_cli.auth import (
+        PROVIDER_REGISTRY,
+        iter_unique_provider_configs,
+        resolve_external_process_provider_credentials,
+        resolve_provider,
+    )
     from hermes_cli.runtime_provider import resolve_runtime_provider
 
     assert PROVIDER_REGISTRY["acme"] is PROVIDER_REGISTRY["acme-acp"]
     assert PROVIDER_REGISTRY["acme-acp"].auth_type == "external_process"
+    assert [cfg.id for cfg in iter_unique_provider_configs()].count("acme-acp") == 1
     assert resolve_provider("acme") == "acme-acp"
 
     creds = resolve_external_process_provider_credentials("acme-acp")
