@@ -4787,7 +4787,15 @@ def resolve_provider_client(
     # Keep the pre-alias name so a custom_providers entry named like a built-in alias
     # (e.g. "kimi" → "kimi-coding") is still reachable via the named-custom branch.
     original_provider = (provider or "").strip().lower()
-    provider = _normalize_aux_provider(provider)
+    if original_provider == "main":
+        raw_main_provider = (_read_main_provider() or "").strip().lower()
+        if raw_main_provider and raw_main_provider not in {"auto", "main"}:
+            original_provider = raw_main_provider
+            provider = _normalize_aux_provider(raw_main_provider)
+        else:
+            provider = _normalize_aux_provider(provider)
+    else:
+        provider = _normalize_aux_provider(provider)
     # MoA chokepoint: "moa" is not an HTTP provider; resolve to the aggregator so direct callers don't
     # dead-end in unknown-provider. Unresolvable preset → leave untouched for the normal diagnostic.
     if provider == "moa":
