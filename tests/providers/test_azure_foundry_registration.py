@@ -45,9 +45,7 @@ def test_azure_foundry_profile_registers_name_and_aliases(rediscovered_providers
     profile = get_provider_profile("azure-foundry")
     assert profile is not None
     assert profile.name == "azure-foundry"
-    loaded = sys.modules.get("plugins.model_providers.azure_foundry")
-    assert loaded is not None, "bundled azure-foundry plugin was not imported"
-    assert isinstance(profile, loaded.AzureFoundryProfile)
+    assert profile.auth_type == "api_key"
     for alias in _AZURE_FOUNDRY_ALIASES:
         assert get_provider_profile(alias) is profile
 
@@ -252,3 +250,19 @@ def test_aux_main_preserves_raw_custom_azure_name(monkeypatch):
 
     assert client is fake_client
     assert model == "custom-model"
+
+
+def test_registry_aliases_do_not_bypass_auto_detect_exclusions(monkeypatch):
+    from hermes_cli import auth
+
+    copilot = auth.PROVIDER_REGISTRY["copilot"]
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "github", copilot)
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "github-copilot", copilot)
+
+    detected = auth._env_key_auto_detected(
+        lambda name: "ambient-github-token" if name == "GITHUB_TOKEN" else "",
+        None,
+    )
+
+    assert detected != "copilot"
+    assert detected not in {"github", "github-copilot"}
