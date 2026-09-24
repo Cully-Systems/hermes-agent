@@ -1395,14 +1395,10 @@ def _env_key_auto_detected(
             if has_usable_secret(scoped_key_env(env_var)):
                 if oauth_active and oauth_active != canonical_id:
                     logger.warning(
-                        # An exported API key now wins over a logged-in OAuth provider (the #29285 fix).
-                        # Surface that so a user who deliberately uses OAuth but has a stale key in
-                        # ~/.hermes/.env isn't silently switched without knowing why.
-                        "Provider resolved to %r via %s, preempting your "
-                        "logged-in OAuth provider %r. If you meant to use the "
-                        "OAuth login, unset %s or set `model.provider` "
-                        "explicitly.",
-                        canonical_id, env_var, oauth_active, env_var)
+                        "An exported API-key provider is preempting the logged-in OAuth provider. "
+                        "If you meant to use OAuth, unset the conflicting provider key or set "
+                        "`model.provider` explicitly."
+                    )
                 return canonical_id
     return None
 
