@@ -549,6 +549,7 @@ _PROVIDER_ALIASES = {
     "tencent": "tencent-tokenhub", "tokenhub": "tencent-tokenhub", "tencent-cloud": "tencent-tokenhub",
     "tencentmaas": "tencent-tokenhub",
     "tokenplan": "tencent-tokenplan", "tencent-lkeap": "tencent-tokenplan",
+    "azure": "azure-foundry", "azure-ai-foundry": "azure-foundry", "azure-ai": "azure-foundry",
 }
 
 
