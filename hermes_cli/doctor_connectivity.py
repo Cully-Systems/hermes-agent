@@ -253,7 +253,15 @@ def _probe_azure_entra() -> ProbeResult:
         model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
         if not isinstance(model_cfg, dict):
             return _skip(name)
-        if [str(model_cfg.get(k) or "").strip().lower() for k in ("provider", "auth_mode")] != ["azure-foundry", "entra_id"]:
+        raw_provider = str(model_cfg.get("provider") or "").strip().lower()
+        auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
+        try:
+            from hermes_cli.auth import _plugin_aliases
+            from hermes_cli.runtime_provider import has_named_custom_provider
+            provider = raw_provider if has_named_custom_provider(raw_provider) else _plugin_aliases().get(raw_provider, raw_provider)
+        except Exception:
+            provider = raw_provider
+        if provider != "azure-foundry" or auth_mode != "entra_id":
             return _skip(name)
     except Exception:
         return _skip(name)
