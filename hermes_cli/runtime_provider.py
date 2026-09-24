@@ -796,10 +796,20 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
         auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
         configured_provider = _cfg_provider_canonical(model_cfg)
         configured_foundry_entra = auth_mode == "entra_id" and configured_provider == "azure-foundry"
-        if not configured_foundry_entra and not explicit_api_key and not explicit_base_url:
+        if not configured_foundry_entra and not explicit_api_key:
             pooled = _resolve_from_pool("azure-foundry", requested_provider, model_cfg, explicit_api_key,
                                         explicit_base_url, target_model)
             if pooled:
+                # An explicit auxiliary endpoint overrides only the URL. Keep using a
+                # credential saved with `hermes auth add azure` when no key was supplied.
+                if explicit_base_url:
+                    return _resolve_azure_foundry_runtime(
+                        requested_provider=requested_provider,
+                        model_cfg=model_cfg,
+                        explicit_api_key=pooled.get("api_key"),
+                        explicit_base_url=explicit_base_url,
+                        target_model=target_model,
+                    )
                 if not str(pooled.get("base_url") or "").strip():
                     env_base_url = _getenv("AZURE_FOUNDRY_BASE_URL", "").strip().rstrip("/")
                     if env_base_url:
