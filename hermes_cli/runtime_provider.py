@@ -842,6 +842,9 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
     _raise_if_provider_disabled(requested_provider)
+    canonical_provider = auth_mod._plugin_aliases().get(requested_provider, requested_provider)
+    if canonical_provider != requested_provider:
+        _raise_if_provider_disabled(canonical_provider)
     return next(r for r in _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, target_model) if r)
 
 
