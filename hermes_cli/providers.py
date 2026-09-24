@@ -473,6 +473,10 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
     pdef = get_provider(canonical)
     if pdef is not None:
         return pdef
+    # If the legacy entry could not shadow a recognized built-in above, keep
+    # it as the fallback for ordinary custom names and explicit custom: ids.
+    if custom_pdef is not None:
+        return custom_pdef
     if user_providers:
         for candidate in (canonical, raw):
             user_pdef = resolve_user_provider(candidate, user_providers)

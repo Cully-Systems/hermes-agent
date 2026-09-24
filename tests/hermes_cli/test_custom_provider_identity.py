@@ -42,6 +42,17 @@ def test_legacy_custom_provider_cannot_shadow_canonical_builtin():
     assert resolved.base_url != "https://private.example/v1"
 
 
+def test_legacy_custom_provider_resolves_when_no_builtin_matches():
+    custom = {"name": "local", "base_url": "https://private.example/v1"}
+
+    resolved = resolve_provider_full("custom:local", user_providers={}, custom_providers=[custom])
+
+    assert resolved is not None
+    assert resolved.id == "custom:local"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "user-config"
+
+
 def test_matches_legacy_custom_providers_list(monkeypatch):
     monkeypatch.setattr(
         rp,
