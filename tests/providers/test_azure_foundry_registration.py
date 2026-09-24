@@ -178,3 +178,16 @@ def test_azure_foundry_alias_honors_canonical_disablement(monkeypatch):
 
     with pytest.raises(ValueError, match="azure-foundry.*disabled"):
         rp.resolve_runtime_provider(requested="azure")
+
+
+def test_azure_alias_does_not_shadow_named_custom_provider(monkeypatch):
+    from hermes_cli import runtime_provider as rp
+
+    monkeypatch.setattr(rp, "has_named_custom_provider", lambda provider: provider == "azure")
+    monkeypatch.setattr(
+        rp,
+        "_resolve_azure_foundry_runtime",
+        lambda **kwargs: pytest.fail("Azure Foundry shortcut must not shadow named custom provider"),
+    )
+
+    assert rp._resolve_requested_shortcuts("azure", None, None, "custom-model") is None
