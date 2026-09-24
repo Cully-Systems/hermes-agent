@@ -69,6 +69,30 @@ def test_doctor_accepts_inline_key_for_custom_alias(monkeypatch):
     assert not any("no API key is configured" in issue for issue in issues)
 
 
+def test_doctor_accepts_inline_key_for_legacy_custom_provider(monkeypatch):
+    from types import SimpleNamespace
+
+    from hermes_cli import config, doctor_config
+
+    legacy_entry = {
+        "name": "claude",
+        "base_url": "https://private.example/v1",
+        "api_key": "legacy-inline-key",
+    }
+    custom_config = {
+        "model": {"provider": "custom:claude", "default": "deployment"},
+        "custom_providers": [legacy_entry],
+    }
+    monkeypatch.setattr(config, "read_user_config_raw", lambda _path: custom_config)
+    monkeypatch.setattr(config, "get_env_value", lambda _name: None)
+    monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
+    issues = []
+
+    doctor_config._validate_model_config("unused", issues)
+
+    assert not any("no API key is configured" in issue for issue in issues)
+
+
 def test_status_labels_named_custom_alias_by_its_configured_name(monkeypatch):
     from hermes_cli import status
 

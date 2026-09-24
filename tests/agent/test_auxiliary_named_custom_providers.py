@@ -44,6 +44,30 @@ class TestNormalizeVisionProvider:
         assert _normalize_vision_provider("auto") == "auto"
         assert _normalize_vision_provider(None) == "auto"
 
+    def test_vision_preserves_custom_provider_that_shadows_azure_alias(self, tmp_path, monkeypatch):
+        _write_config(tmp_path, {
+            "model": {"default": "main-model", "provider": "azure"},
+            "custom_providers": [
+                {"name": "azure", "base_url": "https://private.example/v1", "api_key": "private-key"},
+            ],
+            "auxiliary": {"vision": {"provider": "azure", "model": "vision-model"}},
+        })
+        from agent import auxiliary_client as aux
+        captured = {}
+
+        def _cached(provider, model, *args, **kwargs):
+            captured["provider"] = provider
+            return object(), model
+
+        monkeypatch.setattr(aux, "_get_cached_client", _cached)
+
+        provider, client, model = aux.resolve_vision_provider_client()
+
+        assert provider == "azure"
+        assert client is not None
+        assert model == "vision-model"
+        assert captured["provider"] == "azure"
+
 
 class TestResolveProviderClientMainAlias:
     """resolve_provider_client('main', ...) should resolve to actual main provider."""

@@ -5071,7 +5071,17 @@ def resolve_vision_provider_client(
     requested, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         "vision", provider, model, base_url, api_key
     )
+    raw_requested = requested
     requested = _normalize_vision_provider(requested)
+    if raw_requested and raw_requested != requested:
+        # Keep a configured named custom provider's raw alias so the central
+        # resolver can apply the same alias-collision precedence as text calls.
+        try:
+            from hermes_cli.runtime_provider import _get_named_custom_provider
+            if _get_named_custom_provider(raw_requested) is not None:
+                requested = raw_requested
+        except Exception:
+            pass
     if resolved_base_url:
         provider_for_base_override = requested if requested and requested not in {"", "auto"} else "custom"
         client, final_model = resolve_provider_client(

@@ -204,8 +204,20 @@ def _provider_has_credentials(runtime_provider: str, provider_def=None, config: 
         from hermes_cli.config import get_env_value
         if any(str(get_env_value(name) or "").strip() for name in provider_def.api_key_env_vars):
             return True
-        entry = (config or {}).get("providers", {}).get(provider_def.id, {})
-        return isinstance(entry, dict) and bool(str(entry.get("api_key") or "").strip())
+        user_providers = (config or {}).get("providers")
+        entry = user_providers.get(provider_def.id, {}) if isinstance(user_providers, dict) else {}
+        if isinstance(entry, dict) and str(entry.get("api_key") or "").strip():
+            return True
+        legacy_providers = (config or {}).get("custom_providers")
+        if isinstance(legacy_providers, list):
+            from hermes_cli.providers import custom_provider_slug
+            return any(
+                isinstance(candidate, dict)
+                and custom_provider_slug(candidate.get("name") or "", candidate.get("provider_key") or "") == provider_def.id
+                and bool(str(candidate.get("api_key") or "").strip())
+                for candidate in legacy_providers
+            )
+        return False
     if runtime_provider == "openrouter":
         from hermes_cli.config import get_env_value
         return any(str(get_env_value(k) or "").strip() for k in ("OPENROUTER_API_KEY", "OPENAI_API_KEY"))
