@@ -93,6 +93,65 @@ def test_doctor_accepts_inline_key_for_legacy_custom_provider(monkeypatch):
     assert not any("no API key is configured" in issue for issue in issues)
 
 
+def test_doctor_keeps_canonical_builtin_credentials_when_custom_name_collides(monkeypatch):
+    from types import SimpleNamespace
+
+    from hermes_cli import auth, config, doctor_config
+
+    custom_config = {
+        "model": {"provider": "anthropic", "default": "claude-sonnet-4-5"},
+        "providers": {"anthropic": {"base_url": "https://private.example/v1", "api_key": "custom-key"}},
+    }
+    monkeypatch.setattr(config, "read_user_config_raw", lambda _path: custom_config)
+    monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
+    monkeypatch.setattr(auth, "get_auth_status", lambda _provider: {"configured": False})
+    issues = []
+
+    doctor_config._validate_model_config("unused", issues)
+
+    assert any("No credentials found for provider 'anthropic'" in issue for issue in issues)
+
+
+def test_doctor_accepts_key_command_for_custom_provider(monkeypatch):
+    from types import SimpleNamespace
+
+    from hermes_cli import config, doctor_config
+
+    custom_config = {
+        "model": {"provider": "azure", "default": "deployment"},
+        "providers": {"azure": {"base_url": "https://private.example/v1", "key_cmd": "token-helper"}},
+    }
+    monkeypatch.setattr(config, "read_user_config_raw", lambda _path: custom_config)
+    monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
+    issues = []
+
+    doctor_config._validate_model_config("unused", issues)
+
+    assert not any("no API key is configured" in issue for issue in issues)
+
+
+def test_doctor_accepts_custom_provider_credential_pool(monkeypatch):
+    from types import SimpleNamespace
+
+    from hermes_cli import config, doctor_config, runtime_provider
+
+    custom_config = {
+        "model": {"provider": "azure", "default": "deployment"},
+        "providers": {"azure": {"base_url": "https://private.example/v1"}},
+    }
+    monkeypatch.setattr(config, "read_user_config_raw", lambda _path: custom_config)
+    monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
+    pool_lookups = []
+    monkeypatch.setattr(runtime_provider, "_try_resolve_from_custom_pool",
+                        lambda base_url, provider, provider_name=None: pool_lookups.append((base_url, provider, provider_name)) or {"api_key": "pool-key"})
+    issues = []
+
+    doctor_config._validate_model_config("unused", issues)
+
+    assert not any("no API key is configured" in issue for issue in issues)
+    assert pool_lookups == [("https://private.example/v1", "custom", "azure")]
+
+
 def test_status_labels_named_custom_alias_by_its_configured_name(monkeypatch):
     from hermes_cli import status
 

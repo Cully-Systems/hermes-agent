@@ -205,18 +205,31 @@ def _provider_has_credentials(runtime_provider: str, provider_def=None, config: 
         if any(str(get_env_value(name) or "").strip() for name in provider_def.api_key_env_vars):
             return True
         user_providers = (config or {}).get("providers")
-        entry = user_providers.get(provider_def.id, {}) if isinstance(user_providers, dict) else {}
-        if isinstance(entry, dict) and str(entry.get("api_key") or "").strip():
-            return True
+        entry = {}
+        if isinstance(user_providers, dict):
+            from hermes_cli.providers import custom_provider_slug
+            entry = next((candidate for name, candidate in user_providers.items()
+                          if isinstance(candidate, dict)
+                          and custom_provider_slug(name, candidate.get("provider_key") or name) == provider_def.id), {})
         legacy_providers = (config or {}).get("custom_providers")
         if isinstance(legacy_providers, list):
             from hermes_cli.providers import custom_provider_slug
-            return any(
-                isinstance(candidate, dict)
-                and custom_provider_slug(candidate.get("name") or "", candidate.get("provider_key") or "") == provider_def.id
-                and bool(str(candidate.get("api_key") or "").strip())
-                for candidate in legacy_providers
-            )
+            entry = next((candidate for candidate in legacy_providers
+                          if isinstance(candidate, dict)
+                          and custom_provider_slug(candidate.get("name") or "", candidate.get("provider_key") or "") == provider_def.id), entry)
+        if str(entry.get("api_key") or "").strip() or str(entry.get("key_cmd") or "").strip():
+            return True
+        base_url = str(entry.get("api") or entry.get("base_url") or entry.get("url") or provider_def.base_url or "").strip()
+        if base_url:
+            # Custom provider keys can live in the credential pool instead of config.
+            # Reuse the runtime's local pool lookup contract without invoking key_cmd.
+            try:
+                from hermes_cli.runtime_provider import _try_resolve_from_custom_pool
+                provider_name = str(entry.get("provider_key") or provider_def.id.removeprefix("custom:") or "")
+                if _try_resolve_from_custom_pool(base_url, "custom", provider_name=provider_name):
+                    return True
+            except Exception:
+                pass
         return False
     if runtime_provider == "openrouter":
         from hermes_cli.config import get_env_value
@@ -249,9 +262,11 @@ def _validate_model_config(config_path, issues: list) -> None:
     runtime_provider = catalog_provider = provider
     provider_def = None
     if provider and provider not in {"auto", "custom"}:
+        auth_resolution_succeeded = False
         if resolve_auth is not None:
             try:
                 runtime_provider = resolve_auth(provider)
+                auth_resolution_succeeded = True
                 accept.add(runtime_provider)
             except Exception:
                 runtime_provider = provider
@@ -262,7 +277,13 @@ def _validate_model_config(config_path, issues: list) -> None:
             # The user-configured endpoint matched the raw provider name before
             # plugin aliases. Keep that custom identity for auth checks too.
             if provider_def is not None and provider_def.source == "user-config":
-                runtime_provider = provider_def.id
+                if (not auth_resolution_succeeded or provider != runtime_provider
+                        or provider == "custom" or provider.startswith("custom:")):
+                    runtime_provider = provider_def.id
+                else:
+                    # Exact canonical built-in names are not shadowed by custom
+                    # definitions at runtime; keep their built-in auth path too.
+                    provider_def = None
     if provider and provider != "auto" and (catalog_provider is None or (known_providers and not (accept & valid_provider_ids))):
         known_list = ", ".join(sorted(known_providers)) if known_providers else "(unavailable)"
         _fail_and_issue(f"model.provider '{provider_raw}' is not a recognised provider", f"(known: {known_list})",
