@@ -158,3 +158,23 @@ def test_azure_alias_uses_foundry_runtime_shortcut(monkeypatch):
     assert resolved["provider"] == "azure-foundry"
     assert resolved["api_mode"] == "chat_completions"
     assert resolved["api_key"] == "az-test-key"
+
+
+def test_azure_foundry_auth_command_aliases_use_canonical_pool():
+    from hermes_cli import auth_commands
+
+    for alias in _AZURE_FOUNDRY_ALIASES:
+        assert auth_commands._normalize_provider(alias) == "azure-foundry"
+
+
+def test_azure_foundry_alias_honors_canonical_disablement(monkeypatch):
+    from hermes_cli import runtime_provider as rp
+
+    monkeypatch.setattr(
+        rp._config_mod,
+        "load_config",
+        lambda: {"providers": {"azure-foundry": {"enabled": False}}},
+    )
+
+    with pytest.raises(ValueError, match="azure-foundry.*disabled"):
+        rp.resolve_runtime_provider(requested="azure")
