@@ -84,6 +84,17 @@ def test_azure_foundry_get_provider_resolves_overlay_and_aliases():
         assert get_provider(alias).id == "azure-foundry"
 
 
+def test_azure_foundry_auxiliary_aliases_use_foundry_route(monkeypatch):
+    """Auxiliary provider aliases, including provider: main, canonicalize to Foundry."""
+    from agent import auxiliary_client as aux
+
+    for alias in _AZURE_FOUNDRY_ALIASES:
+        assert aux._normalize_aux_provider(alias) == "azure-foundry"
+
+    monkeypatch.setattr(aux, "_read_main_provider", lambda: "azure")
+    assert aux._normalize_aux_provider("main") == "azure-foundry"
+
+
 def test_azure_foundry_runtime_resolves_adapter_and_transport(monkeypatch):
     """A config using provider: azure-foundry must produce a runtime + transport.
 
