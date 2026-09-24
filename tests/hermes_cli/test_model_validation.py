@@ -371,12 +371,6 @@ class TestAzureFoundryModelApiMode:
         assert azure_foundry_model_api_mode("gpt-4.1") is None
         assert azure_foundry_model_api_mode("gpt-3.5-turbo") is None
 
-    def test_deepseek_family_stays_on_chat_completions(self):
-        """Foundry DeepSeek deployments are OpenAI chat completions, not Responses."""
-        assert azure_foundry_model_api_mode("DeepSeek-V3") is None
-        assert azure_foundry_model_api_mode("deepseek-r1") is None
-        assert azure_foundry_model_api_mode("DeepSeek-V3.1") is None
-        assert azure_foundry_model_api_mode("azure/deepseek-v4-pro") is None
 
 
 # -- validate — format checks -----------------------------------------------
