@@ -1127,3 +1127,28 @@ def test_qwen_oauth_login_marks_active_through_moved_owner(monkeypatch):
 
     assert auth_commands._qwen_oauth_login(None) is creds
     assert marked == [creds]
+
+
+def test_auth_list_loads_alias_provider_pool_once(monkeypatch, capsys):
+    import hermes_cli.auth as auth
+    import hermes_cli.auth_commands as auth_commands
+
+    xai = auth.PROVIDER_REGISTRY["xai"]
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "xai-list-alias", xai)
+    monkeypatch.setattr(auth, "_load_auth_store", lambda: {"credential_pool": {}})
+    monkeypatch.setattr(auth_commands, "list_custom_pool_providers", lambda: [])
+    monkeypatch.setattr(auth_commands, "_get_custom_provider_entries", lambda: [])
+    monkeypatch.setattr(auth_commands, "_print_oauth_heal_notices", lambda: None)
+
+    loaded = []
+
+    class _EmptyPool:
+        def entries(self):
+            return []
+
+    monkeypatch.setattr(auth_commands, "load_pool", lambda provider: loaded.append(provider) or _EmptyPool())
+    auth_commands.auth_list_command(type("Args", (), {"provider": ""})())
+    capsys.readouterr()
+
+    assert loaded.count("xai") == 1
+    assert "xai-list-alias" not in loaded
