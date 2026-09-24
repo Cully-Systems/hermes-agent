@@ -796,7 +796,19 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
             pooled = _resolve_from_pool("azure-foundry", requested_provider, model_cfg, explicit_api_key,
                                         explicit_base_url, target_model)
             if pooled:
-                return pooled
+                if not str(pooled.get("base_url") or "").strip():
+                    env_base_url = str(os.getenv("AZURE_FOUNDRY_BASE_URL") or "").strip().rstrip("/")
+                    if env_base_url:
+                        pooled["base_url"] = env_base_url
+                if str(pooled.get("base_url") or "").strip():
+                    return pooled
+                return _resolve_azure_foundry_runtime(
+                    requested_provider=requested_provider,
+                    model_cfg=model_cfg,
+                    explicit_api_key=pooled.get("api_key"),
+                    explicit_base_url=explicit_base_url,
+                    target_model=target_model,
+                )
         return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=model_cfg,
                                               explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
                                               target_model=target_model)
