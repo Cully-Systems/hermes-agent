@@ -118,6 +118,54 @@ class TestAuxAzureFoundryApiKey:
         assert client is None
         assert resolved is None
 
+    def test_anthropic_override_normalizes_openai_endpoint(self, monkeypatch, patch_load_config):
+        from agent import auxiliary_client as aux
+
+        class _FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs.get("base_url", "")
+                self.api_key = kwargs.get("api_key", "")
+
+        monkeypatch.setattr(aux, "OpenAI", _FakeOpenAI)
+        monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "sk-azure-static-key")
+        patch_load_config({
+            "provider": "azure-foundry",
+            "base_url": "https://r.openai.azure.com/openai/v1",
+            "api_mode": "chat_completions",
+            "default": "claude-sonnet-4-5",
+        })
+        captured = {}
+        monkeypatch.setattr(aux, "_maybe_wrap_anthropic", lambda client, model, key, url, mode: captured.update(
+            base_url=url, api_mode=mode) or client)
+
+        client, _ = aux._try_azure_foundry(model="claude-sonnet-4-5", api_mode="anthropic_messages")
+
+        assert client is not None
+        assert captured == {"base_url": "https://r.openai.azure.com/openai", "api_mode": "anthropic_messages"}
+
+    def test_chat_override_restores_openai_v1_suffix(self, monkeypatch, patch_load_config):
+        from agent import auxiliary_client as aux
+
+        class _FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs.get("base_url", "")
+                self.api_key = kwargs.get("api_key", "")
+
+        monkeypatch.setattr(aux, "OpenAI", _FakeOpenAI)
+
+        monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "sk-azure-static-key")
+        patch_load_config({
+            "provider": "azure-foundry",
+            "base_url": "https://r.openai.azure.com/openai/v1",
+            "api_mode": "anthropic_messages",
+            "default": "gpt-4o",
+        })
+
+        client, _ = aux._try_azure_foundry(model="gpt-4o", api_mode="chat_completions")
+
+        assert client is not None
+        assert client.base_url == "https://r.openai.azure.com/openai/v1"
+
 
 
 # ---------------------------------------------------------------------------

@@ -2782,7 +2782,20 @@ def _try_azure_foundry(
         return None, None
     api_key = runtime.get("api_key")
     base_url = str(runtime.get("base_url", "") or "")
-    runtime_api_mode = api_mode or runtime.get("api_mode") or "chat_completions"
+    configured_api_mode = str(runtime.get("api_mode") or "chat_completions")
+    runtime_api_mode = api_mode or configured_api_mode
+    if api_mode:
+        # The shared resolver has already shaped the endpoint for the main model's
+        # transport. Rebase from the unmodified configured/explicit endpoint when
+        # available, then apply the auxiliary task's effective transport shape.
+        raw_endpoint = str(explicit_base_url or model_cfg.get("base_url") or "").strip().rstrip("/")
+        if raw_endpoint:
+            base_url = raw_endpoint
+        if runtime_api_mode == "anthropic_messages":
+            base_url = re.sub(r"/v1/?$", "", base_url)
+        elif (configured_api_mode == "anthropic_messages" and not raw_endpoint
+              and urlparse(base_url).path.rstrip("/").endswith("/openai")):
+            base_url += "/v1"
     # api_key may be a callable token provider; bail only on None/"".
     if not (callable(api_key) or api_key) or not base_url:
         return None, None
