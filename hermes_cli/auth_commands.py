@@ -513,9 +513,15 @@ def _print_azure_entra_status() -> None:
         from hermes_cli.config import load_config
         cfg = load_config()
         model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
-        if not isinstance(model_cfg, dict) or (
-            str(model_cfg.get("provider") or "").strip().lower() != "azure-foundry"
-            or str(model_cfg.get("auth_mode") or "").strip().lower() != "entra_id"):
+        if not isinstance(model_cfg, dict):
+            return
+        raw_provider = str(model_cfg.get("provider") or "").strip().lower()
+        try:
+            from hermes_cli.runtime_provider import has_named_custom_provider
+            provider = raw_provider if has_named_custom_provider(raw_provider) else auth_mod._plugin_aliases().get(raw_provider, raw_provider)
+        except Exception:
+            provider = auth_mod._plugin_aliases().get(raw_provider, raw_provider)
+        if provider != "azure-foundry" or str(model_cfg.get("auth_mode") or "").strip().lower() != "entra_id":
             return
         from agent.azure_identity_adapter import (
             EntraIdentityConfig, SCOPE_AI_AZURE_DEFAULT, describe_active_credential, has_azure_identity_installed,
