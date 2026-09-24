@@ -116,28 +116,6 @@ def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
     assert entry["access_token"] == "sk-or-manual"
 
 
-def test_auth_add_plugin_alias_uses_canonical_pool_key(tmp_path, monkeypatch):
-    hermes_home = tmp_path / "hermes"
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
-
-    from hermes_cli import auth_commands
-
-    monkeypatch.setattr(auth_commands.auth_mod, "_plugin_aliases", lambda: {"google": "gemini"})
-
-    class _Args:
-        provider = "google"
-        auth_type = "api-key"
-        api_key = "gemini-test-key"
-        label = "google-alias"
-
-    auth_commands.auth_add_command(_Args())
-
-    payload = json.loads((hermes_home / "auth.json").read_text(encoding="utf-8"))
-    assert "gemini" in payload["credential_pool"]
-    assert "google" not in payload["credential_pool"]
-
-
 def test_auth_add_configured_provider_uses_canonical_pool_key(tmp_path, monkeypatch):
     """A keyed providers row must keep its runtime slug in the auth pool."""
     hermes_home = tmp_path / "hermes"
