@@ -166,6 +166,33 @@ class TestAuxAzureFoundryApiKey:
         assert client is not None
         assert client.base_url == "https://r.openai.azure.com/openai/v1"
 
+    def test_auxiliary_override_never_uses_unrelated_main_endpoint(self, monkeypatch, patch_load_config):
+        from agent import auxiliary_client as aux
+        from hermes_cli import runtime_provider
+
+        class _FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs.get("base_url", "")
+                self.api_key = kwargs.get("api_key", "")
+
+        monkeypatch.setattr(aux, "OpenAI", _FakeOpenAI)
+        monkeypatch.setattr(aux, "_maybe_wrap_anthropic", lambda client, *_args: client)
+        patch_load_config({
+            "provider": "openai",
+            "base_url": "https://main-provider.example/v1",
+            "default": "main-model",
+        })
+        monkeypatch.setattr(runtime_provider, "resolve_runtime_provider", lambda **_kwargs: {
+            "provider": "azure-foundry",
+            "api_key": "foundry-pool-key",
+            "api_mode": "chat_completions",
+            "base_url": "https://foundry.openai.azure.com/openai/v1",
+        })
+
+        client, _ = aux._try_azure_foundry(model="claude-sonnet-4-5", api_mode="anthropic_messages")
+
+        assert client.base_url == "https://foundry.openai.azure.com/openai"
+
 
 
 # ---------------------------------------------------------------------------

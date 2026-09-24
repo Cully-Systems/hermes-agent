@@ -2788,7 +2788,14 @@ def _try_azure_foundry(
         # The shared resolver has already shaped the endpoint for the main model's
         # transport. Rebase from the unmodified configured/explicit endpoint when
         # available, then apply the auxiliary task's effective transport shape.
-        raw_endpoint = str(explicit_base_url or model_cfg.get("base_url") or "").strip().rstrip("/")
+        raw_endpoint = str(explicit_base_url or "").strip().rstrip("/")
+        if not raw_endpoint:
+            try:
+                from hermes_cli.runtime_provider import _cfg_provider_canonical
+                if _cfg_provider_canonical(model_cfg) == "azure-foundry":
+                    raw_endpoint = str(model_cfg.get("base_url") or "").strip().rstrip("/")
+            except Exception:
+                pass
         if raw_endpoint:
             base_url = raw_endpoint
         if runtime_api_mode == "anthropic_messages":
