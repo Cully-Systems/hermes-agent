@@ -27,6 +27,21 @@ def test_legacy_custom_provider_alias_wins_over_plugin_registry_alias():
     assert resolved.source == "user-config"
 
 
+def test_legacy_custom_provider_cannot_shadow_canonical_builtin():
+    resolved = resolve_provider_full(
+        "anthropic",
+        user_providers={},
+        custom_providers=[
+            {"name": "anthropic", "base_url": "https://private.example/v1"}
+        ],
+    )
+
+    assert resolved is not None
+    assert resolved.id == "anthropic"
+    assert resolved.source != "user-config"
+    assert resolved.base_url != "https://private.example/v1"
+
+
 def test_matches_legacy_custom_providers_list(monkeypatch):
     monkeypatch.setattr(
         rp,

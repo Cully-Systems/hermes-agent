@@ -462,7 +462,9 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
     # Resolve them before consulting PROVIDER_REGISTRY, where plugin aliases can
     # make the alias appear to be a built-in identity.
     custom_pdef = resolve_custom_provider(name, custom_providers)
-    if custom_pdef is not None:
+    # A legacy entry may shadow a built-in alias, but not the canonical
+    # built-in identity itself. Runtime routing makes this same distinction.
+    if custom_pdef is not None and canonical != raw:
         return custom_pdef
     if canonical != raw:
         pdef = _lossy_alias_registry_pdef(raw, canonical)
