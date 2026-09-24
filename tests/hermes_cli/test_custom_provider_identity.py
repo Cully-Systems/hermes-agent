@@ -9,6 +9,22 @@ end-to-end persist/resume round-trip.
 """
 
 import hermes_cli.runtime_provider as rp
+from hermes_cli.providers import resolve_provider_full
+
+
+def test_legacy_custom_provider_alias_wins_over_plugin_registry_alias():
+    resolved = resolve_provider_full(
+        "claude",
+        user_providers={},
+        custom_providers=[
+            {"name": "claude", "base_url": "https://private.example/v1", "key_env": "PRIVATE_CLAUDE_KEY"}
+        ],
+    )
+
+    assert resolved is not None
+    assert resolved.id == "custom:claude"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "user-config"
 
 
 def test_matches_legacy_custom_providers_list(monkeypatch):

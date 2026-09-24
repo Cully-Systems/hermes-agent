@@ -457,6 +457,13 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
         user_pdef = resolve_user_provider(raw, user_providers)
         if user_pdef is not None:
             return user_pdef
+    # Legacy custom_providers entries intentionally take precedence over built-in
+    # aliases, just like providers.<name> entries and runtime custom resolution.
+    # Resolve them before consulting PROVIDER_REGISTRY, where plugin aliases can
+    # make the alias appear to be a built-in identity.
+    custom_pdef = resolve_custom_provider(name, custom_providers)
+    if custom_pdef is not None:
+        return custom_pdef
     if canonical != raw:
         pdef = _lossy_alias_registry_pdef(raw, canonical)
         if pdef is not None:
@@ -469,9 +476,6 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
             user_pdef = resolve_user_provider(candidate, user_providers)
             if user_pdef is not None:
                 return user_pdef
-    custom_pdef = resolve_custom_provider(name, custom_providers)
-    if custom_pdef is not None:
-        return custom_pdef
     if raw in ("llamacpp", "llama.cpp", "llama-cpp"):
         pdef = _llamacpp_pdef()
         if pdef is not None:

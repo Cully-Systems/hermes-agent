@@ -104,6 +104,31 @@ class TestAuxAzureFoundryApiKey:
         assert client.api_key == "sk-azure-static-key"
 
 
+def test_cached_auxiliary_client_does_not_override_foundry_entra_with_stale_pool_key(monkeypatch):
+    from agent import auxiliary_client as aux
+
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
+        "model": {"provider": "azure-foundry", "auth_mode": "entra_id"}
+    })
+    monkeypatch.setattr("hermes_cli.runtime_provider._cfg_provider_canonical", lambda _cfg: "azure-foundry")
+    monkeypatch.setattr(aux, "_client_cache_key", lambda *a, **k: "entra-regression")
+    monkeypatch.setattr(aux, "_client_cache", {})
+    monkeypatch.setattr(aux, "_normalize_main_runtime", lambda runtime: runtime)
+    monkeypatch.setattr(aux, "_peek_pool_entry", lambda _provider: pytest.fail("stale pool key was selected"))
+    received = {}
+
+    def _resolve(*args, **kwargs):
+        received["explicit_api_key"] = kwargs["explicit_api_key"]
+        return object(), "gpt-4o"
+
+    monkeypatch.setattr(aux, "resolve_provider_client", _resolve)
+    client, model = aux._get_cached_client("azure-foundry", model="gpt-4o")
+
+    assert client is not None
+    assert model == "gpt-4o"
+    assert received["explicit_api_key"] is None
+
+
     def test_no_key_returns_none(self, monkeypatch, patch_load_config):
         from agent.auxiliary_client import _try_azure_foundry
 

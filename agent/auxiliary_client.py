@@ -5399,9 +5399,27 @@ def _get_cached_client(
     # and retry an exhausted key.
     effective_api_key = api_key
     if not effective_api_key:
-        _pe = _peek_pool_entry(_normalize_aux_provider(provider))
-        if _pe is not None:
-            effective_api_key = _pool_runtime_api_key(_pe) or api_key
+        normalized_provider = _normalize_aux_provider(provider)
+        preserve_foundry_entra = False
+        if normalized_provider == "azure-foundry":
+            try:
+                from hermes_cli.config import load_config_readonly
+                from hermes_cli.runtime_provider import _cfg_provider_canonical
+                cfg = load_config_readonly()
+                model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
+                if isinstance(model_cfg, dict):
+                    preserve_foundry_entra = (
+                        str(model_cfg.get("auth_mode") or "").strip().lower() == "entra_id"
+                        and _cfg_provider_canonical(model_cfg) == "azure-foundry"
+                    )
+            except Exception:
+                pass
+        # Do not turn a stale Foundry pool entry into an explicit API-key override:
+        # the shared resolver must be allowed to select the configured Entra token path.
+        if not preserve_foundry_entra:
+            _pe = _peek_pool_entry(normalized_provider)
+            if _pe is not None:
+                effective_api_key = _pool_runtime_api_key(_pe) or api_key
     client, default_model = resolve_provider_client(
         provider, model, async_mode, explicit_base_url=base_url, explicit_api_key=effective_api_key,
         api_mode=api_mode, main_runtime=runtime, is_vision=is_vision, task=task,
