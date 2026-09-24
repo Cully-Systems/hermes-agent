@@ -696,7 +696,7 @@ def _fast_model_from_catalog(provider_id: str) -> str:
         # model" and pin the curated default forever.
         api_key, base_url = "", ""
         try:
-            creds = resolve_api_key_provider_credentials(provider_id) or {}
+            creds = resolve_api_key_provider_credentials(canonical_id) or {}
             api_key = str(creds.get("api_key", "")).strip()
             base_url = str(creds.get("base_url", "")).strip()
         except Exception:
@@ -2029,14 +2029,14 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
         if _is_provider_unhealthy(canonical_id):
             logger.debug("Auxiliary api-key chain: %s is unhealthy, skipping", canonical_id)
             continue
-        if provider_id == "anthropic":
+        if canonical_id == "anthropic":
             # Explicit-config gate: Claude Code credentials must not silently become aux fallback.
             with contextlib.suppress(ImportError):
                 from hermes_cli.auth import is_provider_explicitly_configured
                 if not is_provider_explicitly_configured("anthropic"):
                     continue
             return _try_anthropic()
-        pool_present, entry = _select_pool_entry(provider_id)
+        pool_present, entry = _select_pool_entry(canonical_id)
         if pool_present:
             api_key = _pool_runtime_api_key(entry)
             if not api_key:
@@ -2050,13 +2050,13 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
                 continue
             raw_base_url = str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
             via = ""
-        model = _get_aux_model_for_provider(provider_id) or None
+        model = _get_aux_model_for_provider(canonical_id) or None
         if model is None:
             continue  # skip provider if we don't know a valid aux model
         logger.debug("Auxiliary text client: %s (%s)%s", pconfig.name, model, via)
         # Native Gemini, else OpenAI-wire + Anthropic rewrap.
         base_url = _to_openai_base_url(raw_base_url)
-        if provider_id == "gemini":
+        if canonical_id == "gemini":
             from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
             if is_native_gemini_base_url(base_url):
                 return GeminiNativeClient(api_key=api_key, base_url=base_url), model
@@ -2068,7 +2068,7 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
         elif base_url_host_matches(base_url, "integrate.api.nvidia.com"):
             headers = build_nvidia_nim_headers(base_url)
         else:
-            headers = _profile_default_headers(provider_id)
+            headers = _profile_default_headers(canonical_id)
         extra = {"default_headers": headers} if headers else {}
         merged = _apply_user_default_headers(extra.get("default_headers"))
         if merged:
