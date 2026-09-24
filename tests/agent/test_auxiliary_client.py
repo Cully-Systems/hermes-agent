@@ -506,6 +506,16 @@ class TestNormalizeAuxProvider:
         assert _normalize_aux_provider("github-copilot-acp") == "copilot-acp"
         assert _normalize_aux_provider("copilot-acp-agent") == "copilot-acp"
 
+    def test_maps_aliases_from_discovered_provider_profiles(self, monkeypatch):
+        from hermes_cli import auth
+
+        monkeypatch.setattr(auth, "_plugin_aliases", lambda: {
+            "azure-foundry": "azure-foundry",
+            "private-foundry": "azure-foundry",
+        })
+
+        assert _normalize_aux_provider("private-foundry") == "azure-foundry"
+
 
 class TestReadCodexAccessToken:
     def test_valid_auth_store(self, tmp_path, monkeypatch):

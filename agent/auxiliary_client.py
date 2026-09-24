@@ -568,7 +568,14 @@ def _normalize_aux_provider(provider: Optional[str]) -> str:
         if not main_prov or main_prov in {"auto", "main"}:
             return "custom"
         normalized = main_prov
-    return _PROVIDER_ALIASES.get(normalized, normalized)
+    # Match main runtime provider resolution, including aliases contributed by
+    # dynamically discovered model-provider profiles.
+    try:
+        from hermes_cli.auth import _plugin_aliases
+        aliases = _plugin_aliases()
+    except Exception:
+        aliases = _PROVIDER_ALIASES
+    return aliases.get(normalized, _PROVIDER_ALIASES.get(normalized, normalized))
 
 
 # Sentinel from _fixed_temperature_for_model(): callers strip ``temperature`` entirely.
