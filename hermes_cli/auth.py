@@ -277,8 +277,6 @@ def _register_plugin_provider(pp: Any) -> None:
     else:
         return
     PROVIDER_REGISTRY[pp.name] = pconfig
-    for alias in pp.aliases:  # so resolve_provider() resolves them too
-        PROVIDER_REGISTRY.setdefault(alias, pconfig)
 
 
 try:
@@ -287,12 +285,10 @@ try:
         if _pp.name not in PROVIDER_REGISTRY:
             _register_plugin_provider(_pp)
         else:
-            # Hardcoded rows skip _register_plugin_provider, so plugin aliases
-            # (azure → azure-foundry) never landed on PROVIDER_REGISTRY. A lookup
-            # keyed on the alias then looks like "no adapter registered".
-            pconfig = PROVIDER_REGISTRY[_pp.name]
-            for alias in _pp.aliases:
-                PROVIDER_REGISTRY.setdefault(alias, pconfig)
+            # Registry identity remains canonical-only. Alias resolution belongs
+            # to _plugin_aliases() so identity-sensitive scans never duplicate
+            # credential pools, health state, or setup decisions.
+            pass
 except Exception:
     pass
 
