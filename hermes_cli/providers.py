@@ -467,6 +467,24 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
     if custom_pdef is not None and canonical != raw:
         return custom_pdef
     if canonical != raw:
+        # Ask plugin discovery about the original alias before static Hermes
+        # aliases collapse it onto a bundled provider (e.g. Azure Foundry).
+        try:
+            from providers import get_provider_profile as _profile
+            profile = _profile(raw)
+            if profile is not None and (profile.base_url or "").strip():
+                api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
+                return ProviderDef(
+                    id=profile.name,
+                    name=profile.display_name or profile.name or raw,
+                    transport=api_mode_to_transport.get(profile.api_mode, "openai_chat"),
+                    api_key_env_vars=tuple(profile.env_vars or ()),
+                    base_url=profile.base_url or "",
+                    auth_type=profile.auth_type or "api_key",
+                    source="plugin-profile",
+                )
+        except Exception:
+            pass
         pdef = _lossy_alias_registry_pdef(raw, canonical)
         if pdef is not None:
             return pdef

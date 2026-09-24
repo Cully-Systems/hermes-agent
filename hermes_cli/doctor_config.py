@@ -210,7 +210,8 @@ def _provider_has_credentials(runtime_provider: str, provider_def=None, config: 
             from hermes_cli.providers import custom_provider_slug
             entry = next((candidate for name, candidate in user_providers.items()
                           if isinstance(candidate, dict)
-                          and custom_provider_slug(name, candidate.get("provider_key") or name) == provider_def.id), {})
+                          and (str(name).strip().lower() == provider_def.id.strip().lower()
+                               or custom_provider_slug(name, candidate.get("provider_key") or name) == provider_def.id)), {})
         legacy_providers = (config or {}).get("custom_providers")
         if isinstance(legacy_providers, list):
             from hermes_cli.providers import custom_provider_slug

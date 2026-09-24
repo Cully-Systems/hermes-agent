@@ -53,6 +53,29 @@ def test_legacy_custom_provider_resolves_when_no_builtin_matches():
     assert resolved.source == "user-config"
 
 
+def test_plugin_profile_can_override_builtin_alias_resolution(monkeypatch):
+    import providers as plugin_registry
+    from types import SimpleNamespace
+
+    profile = SimpleNamespace(
+        name="private-azure",
+        display_name="Private Azure",
+        api_mode="chat_completions",
+        env_vars=("PRIVATE_AZURE_KEY",),
+        base_url="https://private.example/v1",
+        auth_type="api_key",
+    )
+    monkeypatch.setattr(plugin_registry, "get_provider_profile",
+                        lambda provider: profile if provider == "azure" else None)
+
+    resolved = resolve_provider_full("azure", user_providers={}, custom_providers=[])
+
+    assert resolved is not None
+    assert resolved.id == "private-azure"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "plugin-profile"
+
+
 def test_matches_legacy_custom_providers_list(monkeypatch):
     monkeypatch.setattr(
         rp,
