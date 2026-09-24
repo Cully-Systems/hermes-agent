@@ -195,9 +195,17 @@ _VENDOR_SLUG_PROVIDERS = {
 }
 
 
-def _provider_has_credentials(runtime_provider: str) -> bool:
+def _provider_has_credentials(runtime_provider: str, provider_def=None, config: dict | None = None) -> bool:
     """Only API-key providers in PROVIDER_REGISTRY are checked — OAuth/SDK/custom providers have their own
     checks elsewhere, and get_auth_status() returns a bare {logged_in: False} for anything it doesn't dispatch."""
+    if provider_def is not None and getattr(provider_def, "source", "") == "user-config":
+        # A raw user-config provider may share an alias with a built-in provider (for example
+        # ``azure`` -> Azure Foundry). Its credentials belong to its own definition, not that alias.
+        from hermes_cli.config import get_env_value
+        if any(str(get_env_value(name) or "").strip() for name in provider_def.api_key_env_vars):
+            return True
+        entry = (config or {}).get("providers", {}).get(provider_def.id, {})
+        return isinstance(entry, dict) and bool(str(entry.get("api_key") or "").strip())
     if runtime_provider == "openrouter":
         from hermes_cli.config import get_env_value
         return any(str(get_env_value(k) or "").strip() for k in ("OPENROUTER_API_KEY", "OPENAI_API_KEY"))
@@ -227,6 +235,7 @@ def _validate_model_config(config_path, issues: list) -> None:
         except Exception:
             continue
     runtime_provider = catalog_provider = provider
+    provider_def = None
     if provider and provider not in {"auto", "custom"}:
         if resolve_auth is not None:
             try:
@@ -257,7 +266,7 @@ def _validate_model_config(config_path, issues: list) -> None:
     if runtime_provider and runtime_provider not in ("auto", "custom"):
         from hermes_cli.doctor import _DHH
         with warn_on_error(""):
-            if not _provider_has_credentials(runtime_provider):
+            if not _provider_has_credentials(runtime_provider, provider_def, cfg):
                 _fail_and_issue(f"model.provider '{runtime_provider}' is set but no API key is configured",
                                 "(check ~/.hermes/.env or run 'hermes setup')",
                                 f"No credentials found for provider '{runtime_provider}'. Run 'hermes setup' or set the provider's "
