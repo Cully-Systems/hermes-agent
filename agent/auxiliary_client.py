@@ -2018,11 +2018,16 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
     except ImportError:
         logger.debug("Could not import PROVIDER_REGISTRY for API-key fallback")
         return None, None
+    seen_provider_ids = set()
     for provider_id, pconfig in PROVIDER_REGISTRY.items():
+        canonical_id = pconfig.id
+        if canonical_id in seen_provider_ids:
+            continue
+        seen_provider_ids.add(canonical_id)
         if pconfig.auth_type != "api_key":
             continue
-        if _is_provider_unhealthy(provider_id):
-            logger.debug("Auxiliary api-key chain: %s is unhealthy, skipping", provider_id)
+        if _is_provider_unhealthy(canonical_id):
+            logger.debug("Auxiliary api-key chain: %s is unhealthy, skipping", canonical_id)
             continue
         if provider_id == "anthropic":
             # Explicit-config gate: Claude Code credentials must not silently become aux fallback.
