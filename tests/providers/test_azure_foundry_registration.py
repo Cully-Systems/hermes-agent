@@ -191,3 +191,64 @@ def test_azure_alias_does_not_shadow_named_custom_provider(monkeypatch):
     )
 
     assert rp._resolve_requested_shortcuts("azure", None, None, "custom-model") is None
+
+
+def test_custom_azure_alias_skips_canonical_disablement(monkeypatch):
+    from hermes_cli import runtime_provider as rp
+
+    monkeypatch.setattr(rp, "has_named_custom_provider", lambda provider: provider == "azure")
+    monkeypatch.setattr(
+        rp._config_mod,
+        "load_config",
+        lambda: {"providers": {"azure-foundry": {"enabled": False}}},
+    )
+    expected = {
+        "provider": "custom",
+        "api_mode": "chat_completions",
+        "base_url": "https://custom.example/v1",
+        "api_key": "custom-key",
+    }
+    monkeypatch.setattr(
+        rp,
+        "_ladder_rungs",
+        lambda *_args, **_kwargs: iter([expected]),
+    )
+
+    assert rp.resolve_runtime_provider(requested="azure") is expected
+
+
+def test_foundry_does_not_reuse_custom_azure_base_url(monkeypatch):
+    from hermes_cli import runtime_provider as rp
+
+    monkeypatch.setattr(rp, "has_named_custom_provider", lambda provider: provider == "azure")
+    model_cfg = {
+        "provider": "azure",
+        "base_url": "https://custom.example/v1",
+    }
+
+    assert rp._config_base_url_for_provider(model_cfg, "azure-foundry") == ""
+    assert rp._config_base_url_for_provider(model_cfg, "azure") == "https://custom.example/v1"
+
+
+def test_aux_main_preserves_raw_custom_azure_name(monkeypatch):
+    from agent import auxiliary_client as aux
+    from hermes_cli import runtime_provider as rp
+
+    custom = {
+        "name": "azure",
+        "base_url": "https://custom.example/v1",
+        "api_mode": "chat_completions",
+        "model": "custom-model",
+    }
+    monkeypatch.setattr(aux, "_read_main_provider", lambda: "azure")
+    monkeypatch.setattr(rp, "_get_named_custom_provider", lambda name: custom if name == "azure" else None)
+    monkeypatch.setattr(aux, "_named_custom_api_key", lambda *_args, **_kwargs: "custom-key")
+    fake_client = object()
+    monkeypatch.setattr(aux, "_named_custom_openai_wire_client", lambda *_args, **_kwargs: fake_client)
+    monkeypatch.setattr(aux, "_wrap_transport", lambda _req, client, *_args, **_kwargs: client)
+    monkeypatch.setattr(aux, "_route_client", lambda _req, client, model: (client, model))
+
+    client, model = aux.resolve_provider_client("main", model="custom-model")
+
+    assert client is fake_client
+    assert model == "custom-model"
