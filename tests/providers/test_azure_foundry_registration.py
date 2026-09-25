@@ -238,6 +238,28 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     assert custom_runtime["api_key"] == "custom-profile-key"
     assert custom_runtime["base_url"] == "https://custom-azure.example/v1"
 
+    # The same same-name override must remain on the generic profile-backed path
+    # for explicit and pooled credentials; canonical naming alone is not enough
+    # to enter the bundled Foundry resolver.
+    explicit_runtime = rp.resolve_runtime_provider(
+        requested="azure-custom", explicit_api_key="explicit-profile-key")
+    assert explicit_runtime["provider"] == "azure-foundry"
+    assert explicit_runtime["api_key"] == "explicit-profile-key"
+    assert explicit_runtime["base_url"] == "https://custom-azure.example/v1"
+
+    monkeypatch.delenv("CUSTOM_AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    pool = load_pool("azure-foundry")
+    pool.add_entry(PooledCredential(
+        provider="azure-foundry", id=uuid.uuid4().hex[:6], label="override-pool",
+        auth_type=AUTH_TYPE_API_KEY, priority=0, source=SOURCE_MANUAL,
+        access_token="pooled-profile-key",
+    ))
+    pooled_runtime = rp.resolve_runtime_provider(requested="azure-custom")
+    assert pooled_runtime["provider"] == "azure-foundry"
+    assert pooled_runtime["api_key"] == "pooled-profile-key"
+    assert pooled_runtime["base_url"] == "https://custom-azure.example/v1"
+
 
 def test_named_azure_custom_endpoint_owns_catalog_identity(monkeypatch):
     from hermes_cli import models

@@ -454,7 +454,7 @@ def _pool_entry_mode_and_url(provider, entry, model_cfg, effective_model, base_u
     if provider == "copilot":
         api_mode = _copilot_runtime_api_mode(model_cfg, getattr(entry, "runtime_api_key", ""), target_model=effective_model)
         return api_mode, base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
-    if provider == "azure-foundry":
+    if provider == "azure-foundry" and _uses_bundled_azure_foundry_profile():
         api_mode = "chat_completions"
         if _cfg_provider_canonical(model_cfg) == "azure-foundry":
             base_url = _config_base_url_for_provider(model_cfg, "azure-foundry") or base_url
@@ -617,6 +617,8 @@ def _resolve_explicit_runtime(*, provider: str, requested_provider: str, model_c
     if not explicit_api_key and not explicit_base_url:
         return None
     resolver = _EXPLICIT_RESOLVERS.get(provider)
+    if provider == "azure-foundry" and not _uses_bundled_azure_foundry_profile():
+        resolver = None
     if resolver is not None:
         return resolver(requested_provider, model_cfg, explicit_api_key, explicit_base_url, target_model)
     pconfig = PROVIDER_REGISTRY.get(provider)
