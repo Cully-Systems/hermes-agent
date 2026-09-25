@@ -52,6 +52,10 @@ def test_azure_foundry_registration_aliases_and_pool_runtime(monkeypatch, tmp_pa
 
 def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusions(monkeypatch):
     from agent import auxiliary_client as aux
+    import providers as provider_registry
+
+    real_list_providers = provider_registry.list_providers
+    real_get_provider_aliases = provider_registry.get_provider_aliases
 
     monkeypatch.setattr(config, "load_config", lambda: {"model": {"provider": "azure"}})
     assert auth._config_model_provider()[1] == "azure-foundry"
@@ -148,9 +152,27 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
 
     custom_profile = ProviderProfile(name="custom-azure", aliases=("azure",))
     monkeypatch.setattr("providers.list_providers", lambda: [custom_profile])
+    monkeypatch.setattr("providers.get_provider_aliases", lambda: {"azure": "custom-azure"})
     monkeypatch.setitem(auth.PROVIDER_REGISTRY, "custom-azure", auth.ProviderConfig(
         id="custom-azure", name="Custom Azure", auth_type="api_key"))
     assert auth._plugin_aliases()["azure"] == "custom-azure"
     assert auth.resolve_provider("azure") == "custom-azure"
     monkeypatch.setattr(rp, "has_named_custom_provider", lambda _provider: False)
     assert rp._resolve_requested_shortcuts("azure", None, None, None) is None
+
+    # Same-name replacement preserves the registry's original list slot, but
+    # alias ownership follows actual registration order. The Anthropic profile
+    # must not reclaim claude after a later Azure Foundry override registers it.
+    monkeypatch.setattr(provider_registry, "_REGISTRY", {})
+    monkeypatch.setattr(provider_registry, "_ALIASES", {})
+    monkeypatch.setattr(provider_registry, "_discovered", True)
+    monkeypatch.setattr(provider_registry, "_PROVIDER_LIST_CACHE", None)
+    monkeypatch.setattr(provider_registry, "list_providers", real_list_providers)
+    monkeypatch.setattr(provider_registry, "get_provider_aliases", real_get_provider_aliases)
+    provider_registry.register_provider(ProviderProfile(name="azure-foundry"))
+    provider_registry.register_provider(ProviderProfile(name="anthropic", aliases=("claude",)))
+    provider_registry.register_provider(ProviderProfile(name="azure-foundry", aliases=("claude",)))
+    listed = provider_registry.list_providers()
+    assert [profile.name for profile in listed] == ["azure-foundry", "anthropic"]
+    assert auth._plugin_aliases()["claude"] == "azure-foundry"
+    assert auth.resolve_provider("claude") == "azure-foundry"

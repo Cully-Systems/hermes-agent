@@ -1302,13 +1302,13 @@ def _plugin_aliases() -> Dict[str, str]:
     """``_PROVIDER_ALIASES`` extended with aliases declared in plugins/model-providers/<name>/."""
     aliases = dict(_PROVIDER_ALIASES)
     try:
-        from providers import list_providers as _lp
-        for _pp in _lp():
-            for _alias in _pp.aliases:
-                # Plugin registry precedence is last-writer-wins, including aliases.
-                # A declared plugin alias must be able to override a built-in shortcut
-                # such as ``azure`` and route through that plugin's auth/runtime.
-                aliases[_alias] = _pp.name
+        from providers import get_provider_aliases
+
+        # Use the registration map directly. Rebuilding this from list_providers()
+        # loses registration order when a same-name profile is replaced in-place
+        # in the registry (for example, a user Azure Foundry plugin claiming claude).
+        # The authoritative map already records the last registered alias owner.
+        aliases.update(get_provider_aliases())
     except Exception:
         pass
     return aliases
