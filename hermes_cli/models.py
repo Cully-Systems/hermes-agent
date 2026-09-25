@@ -1444,6 +1444,16 @@ def _credential_fingerprint(provider: str) -> str:
     base-url env vars from ``PROVIDER_REGISTRY`` plus the mtimes of ``auth.json`` and external
     credential files (OAuth re-auth busts the cache without parsing every file shape)."""
     import hashlib
+    import hmac
+
+    def _secret_fingerprint(value: Any) -> str:
+        # HMAC is used here as a stable, one-way cache marker; raw credentials and
+        # secret-bearing headers must never enter the on-disk catalog fingerprint.
+        return hmac.new(
+            b"hermes-provider-catalog-cache-v1",
+            str(value or "").encode("utf-8", errors="replace"),
+            hashlib.sha256,
+        ).hexdigest()
 
     # Keyless providers serve the catalog anonymously: nothing the user rotates should invalidate
     # the entry, so a stable fingerprint keeps the SWR cache alive and busts only on TTL expiry.
@@ -1459,17 +1469,18 @@ def _credential_fingerprint(provider: str) -> str:
             key_env = str(named.get("key_env") or "").strip()
             parts.extend([
                 f"named_custom.base_url={named.get('base_url', '')}",
-                f"named_custom.api_key={named.get('api_key', '')}",
+                f"named_custom.api_key={_secret_fingerprint(named.get('api_key', ''))}",
                 f"named_custom.key_env={key_env}",
-                f"named_custom.key_env_value={os.environ.get(key_env, '') if key_env else ''}",
+                "named_custom.key_env_value="
+                + _secret_fingerprint(os.environ.get(key_env, "") if key_env else ""),
                 f"named_custom.key_cmd={named.get('key_cmd', '')}",
                 f"named_custom.api_mode={named.get('api_mode', '')}",
                 "named_custom.extra_headers="
-                + json.dumps(named.get("extra_headers", {}), sort_keys=True, default=str),
+                + _secret_fingerprint(json.dumps(named.get("extra_headers", {}), sort_keys=True, default=str)),
             ])
             # Host-gated fallback keys can also authenticate a named endpoint.
             for key_name in ("CUSTOM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
-                parts.append(f"{key_name}={os.environ.get(key_name, '')}")
+                parts.append(f"{key_name}={_secret_fingerprint(os.environ.get(key_name, ''))}")
     except Exception:
         pass
     try:
