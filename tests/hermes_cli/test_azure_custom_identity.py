@@ -142,14 +142,17 @@ def test_doctor_accepts_custom_provider_credential_pool(monkeypatch):
     monkeypatch.setattr(config, "read_user_config_raw", lambda _path: custom_config)
     monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
     pool_lookups = []
-    monkeypatch.setattr(runtime_provider, "_try_resolve_from_custom_pool",
-                        lambda base_url, provider, provider_name=None: pool_lookups.append((base_url, provider, provider_name)) or {"api_key": "pool-key"})
+    monkeypatch.setattr(
+        runtime_provider, "_try_resolve_from_custom_pool",
+        lambda base_url, provider, api_mode_override=None, provider_name=None, *, read_only=False:
+            pool_lookups.append((base_url, provider, provider_name, read_only)) or {"api_key": "pool-key"},
+    )
     issues = []
 
     doctor_config._validate_model_config("unused", issues)
 
     assert not any("no API key is configured" in issue for issue in issues)
-    assert pool_lookups == [("https://private.example/v1", "custom", "azure")]
+    assert pool_lookups == [("https://private.example/v1", "custom", "azure", True)]
 
 
 def test_status_labels_named_custom_alias_by_its_configured_name(monkeypatch):
