@@ -896,6 +896,40 @@ def test_logout_resets_codex_config_when_auth_state_already_cleared(tmp_path, mo
     assert "base_url: https://openrouter.ai/api/v1" in config_text
 
 
+def test_logout_alias_clears_canonical_plugin_auth_and_resets_alias_config(tmp_path, monkeypatch, capsys):
+    """Logout aliases must remove canonical pool state and unpin alias-selected config."""
+    hermes_home = tmp_path / "hermes"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    _write_auth_store(tmp_path, {
+        "version": 1,
+        "active_provider": "azure-foundry",
+        "providers": {"azure-foundry": {"access_token": "foundry-token"}},
+        "credential_pool": {"azure-foundry": [{
+            "id": "foundry-1", "auth_type": "api_key", "access_token": "foundry-key",
+        }]},
+    })
+    (hermes_home / "config.yaml").write_text(
+        "model:\n"
+        "  provider: azure\n"
+        "  base_url: https://example.openai.azure.com/v1\n",
+        encoding="utf-8",
+    )
+
+    from types import SimpleNamespace
+    from hermes_cli.auth import logout_command
+
+    logout_command(SimpleNamespace(provider="azure"))
+
+    payload = json.loads((hermes_home / "auth.json").read_text())
+    assert payload["active_provider"] is None
+    assert "azure-foundry" not in payload["providers"]
+    assert "azure-foundry" not in payload["credential_pool"]
+    config_text = (hermes_home / "config.yaml").read_text()
+    assert "provider: auto" in config_text
+    assert "base_url: https://openrouter.ai/api/v1" in config_text
+    assert "Logged out of Azure Foundry." in capsys.readouterr().out
+
+
 
 
 def test_unsuppress_credential_source_clears_marker(tmp_path, monkeypatch):

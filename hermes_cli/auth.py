@@ -2148,8 +2148,23 @@ def _get_config_provider() -> Optional[str]:
 
 def _should_reset_config_provider_on_logout(provider_id: Optional[str]) -> bool:
     """True when logout should reset model.provider (a registry provider config.yaml selects)."""
+    normalize = _normalize_logout_provider_id
+    normalized = normalize(provider_id) if provider_id else ""
+    configured = _get_config_provider()
+    configured = normalize(configured) if configured else None
+    return normalized in PROVIDER_REGISTRY and configured == normalized
+
+
+def _normalize_logout_provider_id(provider_id: Optional[str]) -> str:
+    """Normalize an auth/logout target with the same custom/plugin precedence as auth commands."""
     normalized = (provider_id or "").strip().lower()
-    return normalized in PROVIDER_REGISTRY and _get_config_provider() == normalized
+    if not normalized:
+        return ""
+    # Keep alias ownership, including later plugin overrides and named custom providers,
+    # consistent with `hermes auth logout` and the other credential-pool commands.
+    from hermes_cli.auth_commands import _normalize_provider
+
+    return _normalize_provider(normalized)
 
 
 def _logout_default_provider_from_config() -> Optional[str]:
@@ -2206,7 +2221,8 @@ def logout_command(args) -> None:
     if provider_id and not is_known_auth_provider(provider_id):
         print(f"Unknown provider: {provider_id}")
         raise SystemExit(1)
-    target = provider_id or get_active_provider() or _logout_default_provider_from_config()
+    raw_target = provider_id or get_active_provider() or _logout_default_provider_from_config()
+    target = _normalize_logout_provider_id(raw_target) if raw_target else None
     if not target:
         print("No provider is currently logged in.")
         return
