@@ -205,7 +205,14 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     Hermes-only overlay (nous, openai-codex, …); plugin provider profiles with a concrete endpoint."""
     canonical = normalize_provider(name)
     mdev_info = _models_dev_info(canonical, allow_network)
-    overlay = HERMES_OVERLAYS.get(canonical)
+    # Plugin profiles may claim a legacy provider's canonical id (for example
+    # ``ai-gateway`` owns the ``vercel`` alias and ``kilocode`` owns ``kilo``).
+    # Keep the Hermes-only metadata attached to that identity after profile-first
+    # normalization instead of silently dropping aggregator and endpoint settings.
+    direct_overlay = HERMES_OVERLAYS.get(canonical)
+    legacy_id = ALIASES.get(canonical, "")
+    inherited_overlay = direct_overlay is None and legacy_id in HERMES_OVERLAYS
+    overlay = direct_overlay or (HERMES_OVERLAYS.get(legacy_id) if inherited_overlay else None)
     if mdev_info is not None:
         ov = overlay or HermesOverlay()
         env_vars = list(mdev_info.env)
@@ -214,7 +221,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
                 env_vars.append(ev)
         return _overlay_pdef(canonical, ov, mdev_info.name, tuple(env_vars), ov.base_url_override or mdev_info.api,
                              mdev_info.doc, "models.dev")
-    if overlay is not None:
+    if overlay is not None and not inherited_overlay:
         return _overlay_pdef(canonical, overlay, _LABEL_OVERRIDES.get(canonical, canonical), overlay.extra_env_vars,
                              overlay.base_url_override, "", "hermes")
     # Plugin-registered profiles absent from models.dev and HERMES_OVERLAYS still own their
@@ -226,9 +233,19 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
         _prof = _profile(canonical)
         if _prof is not None and _prof.name != "custom":
             _api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
+            profile_env = list(_prof.env_vars or ())
+            active_overlay = overlay or HermesOverlay()
+            for env_var in active_overlay.extra_env_vars:
+                if env_var not in profile_env:
+                    profile_env.append(env_var)
+            profile_transport = _api_mode_to_transport.get(_prof.api_mode, "openai_chat")
+            transport = (active_overlay.transport if active_overlay.transport != "openai_chat"
+                         else profile_transport)
             return ProviderDef(id=canonical, name=_prof.display_name or _prof.name or canonical,
-                               transport=_api_mode_to_transport.get(_prof.api_mode, "openai_chat"),
-                               api_key_env_vars=tuple(_prof.env_vars or ()), base_url=_prof.base_url or "",
+                               transport=transport, api_key_env_vars=tuple(profile_env),
+                               base_url=active_overlay.base_url_override or _prof.base_url or "",
+                               base_url_env_var=active_overlay.base_url_env_var,
+                               is_aggregator=active_overlay.is_aggregator,
                                auth_type=_prof.auth_type or "api_key", source="plugin-profile")
     except Exception:
         pass

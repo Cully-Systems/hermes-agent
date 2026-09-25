@@ -751,6 +751,23 @@ def _raise_if_provider_disabled(requested_provider: str) -> None:
                          f"(providers.{requested_provider}.enabled: false)")
 
 
+def _uses_bundled_azure_foundry_profile() -> bool:
+    """Whether the active canonical Foundry profile is the bundled profile itself.
+
+    User profiles intentionally replace bundled profiles with the same name. The
+    Azure-specific resolver is only correct for the bundled profile's contract;
+    overrides must reach the ordinary registered-provider runtime, which uses
+    the active profile's endpoint and environment variables.
+    """
+    try:
+        from providers import get_provider_profile
+        from plugins.model_providers.azure_foundry import azure_foundry
+
+        return get_provider_profile("azure-foundry") is azure_foundry
+    except Exception:
+        return False
+
+
 def _resolve_vertex_runtime(requested_provider: str) -> Dict[str, Any]:
     """Vertex AI (OAuth2). The credential *path* (GOOGLE_APPLICATION_CREDENTIALS) must never be
     treated as a static API key; a short-lived token is minted per call, and mid-session expiry is
@@ -785,6 +802,7 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
     # to the generic api_key path (empty Foundry base_url → "no adapter" / AuthError).
     if (
         auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry"
+        and _uses_bundled_azure_foundry_profile()
         and not has_named_custom_provider(requested_provider)
     ):
         model_cfg = _get_model_config()

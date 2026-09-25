@@ -56,6 +56,9 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
 
     real_list_providers = provider_registry.list_providers
     real_get_provider_aliases = provider_registry.get_provider_aliases
+    real_get_provider_profile = provider_registry.get_provider_profile
+    real_resolve_runtime_provider = rp.resolve_runtime_provider
+    real_ladder_rungs = rp._ladder_rungs
 
     monkeypatch.setattr(config, "load_config", lambda: {"model": {"provider": "azure"}})
     assert auth._config_model_provider()[1] == "azure-foundry"
@@ -181,10 +184,39 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     monkeypatch.setattr(provider_registry, "_PROVIDER_LIST_CACHE", None)
     monkeypatch.setattr(provider_registry, "list_providers", real_list_providers)
     monkeypatch.setattr(provider_registry, "get_provider_aliases", real_get_provider_aliases)
+    monkeypatch.setattr(provider_registry, "get_provider_profile", real_get_provider_profile)
     provider_registry.register_provider(ProviderProfile(name="azure-foundry"))
     provider_registry.register_provider(ProviderProfile(name="anthropic", aliases=("claude",)))
-    provider_registry.register_provider(ProviderProfile(name="azure-foundry", aliases=("claude",)))
+    azure_override = ProviderProfile(
+        name="azure-foundry", aliases=("claude", "azure-custom"),
+        env_vars=("CUSTOM_AZURE_API_KEY", "CUSTOM_AZURE_BASE_URL"),
+        base_url="https://custom-azure.example/v1",
+    )
+    provider_registry.register_provider(azure_override)
     listed = provider_registry.list_providers()
     assert [profile.name for profile in listed] == ["azure-foundry", "anthropic"]
     assert auth._plugin_aliases()["claude"] == "azure-foundry"
     assert auth.resolve_provider("claude") == "azure-foundry"
+    assert rp._resolve_requested_shortcuts("azure-custom", None, None, None) is None
+
+    # The same-name override must flow through the ordinary profile-backed API-key
+    # resolver, preserving its URL and credentials instead of taking the bundled
+    # Foundry shortcut (which requires Azure-specific config and keys).
+    monkeypatch.setattr(rp._config_mod, "load_config", lambda: {"model": {"provider": "azure-custom"}})
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {"provider": "azure-custom"})
+    monkeypatch.setattr(rp, "_resolve_from_pool", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(rp, "resolve_api_key_provider_credentials", lambda provider: {
+        "provider": provider, "api_key": "custom-profile-key", "base_url": azure_override.base_url,
+        "source": "env",
+    })
+    monkeypatch.setattr(rp, "PROVIDER_REGISTRY", dict(rp.PROVIDER_REGISTRY))
+    monkeypatch.setitem(rp.PROVIDER_REGISTRY, "azure-foundry", auth._api_key_provider(
+        "azure-foundry", "Azure Foundry override", azure_override.base_url,
+        ("CUSTOM_AZURE_API_KEY",), "CUSTOM_AZURE_BASE_URL",
+    ))
+    monkeypatch.setattr(rp, "resolve_runtime_provider", real_resolve_runtime_provider)
+    monkeypatch.setattr(rp, "_ladder_rungs", real_ladder_rungs)
+    custom_runtime = rp.resolve_runtime_provider(requested="azure-custom")
+    assert custom_runtime["provider"] == "azure-foundry"
+    assert custom_runtime["api_key"] == "custom-profile-key"
+    assert custom_runtime["base_url"] == azure_override.base_url
