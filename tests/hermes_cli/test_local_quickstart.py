@@ -52,6 +52,12 @@ def quickstart_fit(monkeypatch):
         "hermes_cli.web_routers.local_models._engine_too_old",
         lambda min_engine: False,
     )
+    # Runtime asset preflight is host/backend-specific and is not part of
+    # quickstart sequencing. The install leg itself is mocked per test.
+    monkeypatch.setattr(
+        "hermes_cli.web_routers.local_models._resolve_assets_or_400",
+        lambda tag, backend: [],
+    )
 
 
 def test_quickstart_unknown_model_404s(client):
