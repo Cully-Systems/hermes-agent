@@ -279,10 +279,16 @@ def _register_plugin_provider(pp: Any) -> None:
         else:
             return
     PROVIDER_REGISTRY[pp.name] = pconfig
-    # Preserve the long-standing public lookup contract for plugin aliases.
-    # Identity-sensitive scans use iter_unique_provider_configs() below.
+    # Preserve the public alias lookup contract using the registry's actual
+    # last-writer-wins ownership. A profile replacing an existing registry name
+    # keeps that name's dict insertion slot, so list_providers() order cannot
+    # safely decide which provider owns a colliding alias.
+    from providers import get_provider_aliases
+
+    alias_owners = get_provider_aliases()
     for alias in pp.aliases:
-        PROVIDER_REGISTRY.setdefault(alias, pconfig)
+        if alias_owners.get(alias) == pp.name:
+            PROVIDER_REGISTRY[alias] = pconfig
 
 
 def iter_unique_provider_configs():

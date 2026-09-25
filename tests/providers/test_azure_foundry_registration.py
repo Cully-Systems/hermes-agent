@@ -150,15 +150,27 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     # registration and must take precedence over the static Azure Foundry shortcut.
     from providers.base import ProviderProfile
 
-    custom_profile = ProviderProfile(name="custom-azure", aliases=("azure",))
+    custom_profile = ProviderProfile(
+        name="custom-azure", aliases=("claude",), env_vars=("CUSTOM_AZURE_API_KEY",),
+        base_url="https://custom-azure.example/v1")
     monkeypatch.setattr("providers.list_providers", lambda: [custom_profile])
-    monkeypatch.setattr("providers.get_provider_aliases", lambda: {"azure": "custom-azure"})
-    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "custom-azure", auth.ProviderConfig(
-        id="custom-azure", name="Custom Azure", auth_type="api_key"))
-    assert auth._plugin_aliases()["azure"] == "custom-azure"
-    assert auth.resolve_provider("azure") == "custom-azure"
+    monkeypatch.setattr("providers.get_provider_aliases", lambda: {"claude": "custom-azure"})
+    monkeypatch.setattr(
+        "providers.get_provider_profile",
+        lambda name: custom_profile if name in {"claude", "custom-azure"} else None,
+    )
+    monkeypatch.setattr(auth, "PROVIDER_REGISTRY", dict(auth.PROVIDER_REGISTRY))
+    auth._register_plugin_provider(custom_profile)
+    assert auth.PROVIDER_REGISTRY["claude"] is auth.PROVIDER_REGISTRY["custom-azure"]
+    assert auth._plugin_aliases()["claude"] == "custom-azure"
+    assert auth.resolve_provider("claude") == "custom-azure"
+    from agent.agent_init import _provider_default_routes
+
+    plugin_routes = _provider_default_routes("custom-azure")
+    assert "https://custom-azure.example/v1" in plugin_routes
+    assert "https://api.anthropic.com" not in plugin_routes
     monkeypatch.setattr(rp, "has_named_custom_provider", lambda _provider: False)
-    assert rp._resolve_requested_shortcuts("azure", None, None, None) is None
+    assert rp._resolve_requested_shortcuts("claude", None, None, None) is None
 
     # Same-name replacement preserves the registry's original list slot, but
     # alias ownership follows actual registration order. The Anthropic profile
