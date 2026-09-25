@@ -166,6 +166,17 @@ TRANSPORT_TO_API_MODE: Dict[str, str] = {
 def normalize_provider(name: str) -> str:
     """Resolve aliases and normalise casing to a canonical provider id."""
     key = name.strip().lower()
+    # Provider profiles have later-registration-wins semantics. Resolve their
+    # alias owner before applying the static fallback table so plugin aliases
+    # stay consistent across runtime, picker, catalog, and doctor surfaces.
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(key)
+        if profile and (key == profile.name or key in profile.aliases):
+            return profile.name
+    except Exception:
+        pass
     return ALIASES.get(key, key)
 
 
@@ -202,16 +213,14 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     if overlay is not None:
         return _overlay_pdef(canonical, overlay, _LABEL_OVERRIDES.get(canonical, canonical), overlay.extra_env_vars,
                              overlay.base_url_override, "", "hermes")
-    # Plugin-registered profiles (plugins/model-providers/<name>/) absent from models.dev and
-    # HERMES_OVERLAYS would otherwise be "Unknown provider" in /model, --provider and model-switch
-    # even though the picker lists them. Only profiles with a concrete endpoint resolve here:
-    # placeholder profiles like ``custom`` (aliases ollama/local/vllm) ship an empty base_url and
-    # are completed by config.yaml custom_providers — resolving them would preempt
-    # resolve_provider_full's custom step and collapse keyed ``custom:<name>`` ids to bare custom.
+    # Plugin-registered profiles absent from models.dev and HERMES_OVERLAYS still own their
+    # identity when the endpoint is dynamic or the transport is non-HTTP. The generic ``custom``
+    # placeholder is the exception: its endpoint comes from custom_providers and resolving it
+    # here would collapse keyed ``custom:<name>`` ids to bare custom.
     try:
         from providers import get_provider_profile as _profile
         _prof = _profile(canonical)
-        if _prof is not None and (_prof.base_url or "").strip():
+        if _prof is not None and _prof.name != "custom":
             _api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
             return ProviderDef(id=canonical, name=_prof.display_name or _prof.name or canonical,
                                transport=_api_mode_to_transport.get(_prof.api_mode, "openai_chat"),
@@ -472,7 +481,7 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
         try:
             from providers import get_provider_profile as _profile
             profile = _profile(raw)
-            if profile is not None and (profile.base_url or "").strip():
+            if profile is not None and profile.name != "custom":
                 api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
                 return ProviderDef(
                     id=profile.name,

@@ -917,6 +917,18 @@ def normalize_provider(provider: Optional[str]) -> str:
     """Normalize provider aliases to canonical ids. ``"auto"`` passes through — use
     ``hermes_cli.auth.resolve_provider()`` to resolve it from credentials."""
     normalized = (provider or "openrouter").strip().lower()
+    # Discovered model-provider profiles use last-registration-wins for aliases,
+    # including aliases that overlap this static compatibility table (for example
+    # a user plugin claiming ``azure``). Preserve that identity for catalogs and
+    # cache keys before applying the built-in fallback.
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(normalized)
+        if profile and (normalized == profile.name or normalized in profile.aliases):
+            return profile.name
+    except Exception:
+        pass
     return _PROVIDER_ALIASES.get(normalized, normalized)
 
 
@@ -1272,8 +1284,10 @@ def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
     from providers import get_provider_profile
 
     profile = get_provider_profile(normalized)
-    if not (profile and profile.auth_type == "api_key" and profile.base_url):
+    if not profile:
         return None
+    if profile.auth_type != "api_key":
+        return list(profile.fallback_models) if profile.fallback_models else None
     api_key, base_url = _api_key_credentials(normalized)
     live = profile.fetch_models(api_key=api_key, base_url=base_url or profile.base_url or None) if api_key else None
     if not live:

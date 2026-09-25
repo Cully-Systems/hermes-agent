@@ -171,3 +171,60 @@ def test_status_labels_named_custom_alias_by_its_configured_name(monkeypatch):
     monkeypatch.setattr(status, "has_named_custom_provider", lambda provider: provider == "azure")
 
     assert status._effective_provider_label() == "Private Azure Proxy"
+
+
+def test_endpointless_plugin_azure_alias_owns_catalog_cache_and_doctor_identity(monkeypatch):
+    from types import SimpleNamespace
+    import time
+
+    from hermes_cli import auth, config, doctor_config, models
+    from hermes_cli import providers as provider_defs
+    from providers import ProviderProfile
+
+    profile = ProviderProfile(
+        name="custom-azure-plugin",
+        display_name="Dynamic Azure Plugin",
+        aliases=("azure",),
+        env_vars=("CUSTOM_AZURE_PLUGIN_KEY",),
+        fallback_models=("dynamic-azure-model",),
+        base_url="",
+    )
+    monkeypatch.setattr("providers.get_provider_profile", lambda name: profile if name in {"azure", profile.name} else None)
+    monkeypatch.setattr("providers.list_providers", lambda: [profile])
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, profile.name, auth.ProviderConfig(
+        id=profile.name, name=profile.display_name, auth_type="api_key",
+        api_key_env_vars=profile.env_vars))
+    monkeypatch.setattr(provider_defs, "_models_dev_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(models, "_api_key_credentials", lambda _provider: ("", ""))
+
+    assert models.normalize_provider("azure") == profile.name
+    assert provider_defs.normalize_provider("azure") == profile.name
+    assert models.provider_model_ids("azure") == ["dynamic-azure-model"]
+    assert models.curated_models_for_provider("azure") == [("dynamic-azure-model", "")]
+    assert models._normalized_cache_slug("azure") == profile.name
+    now = time.time()
+    monkeypatch.setattr(models, "_load_provider_models_cache", lambda: {
+        profile.name: {"fp": "plugin-fp", "at": now, "models": ["plugin-cache-model"]},
+        "azure-foundry": {"fp": "plugin-fp", "at": now, "models": ["wrong-foundry-model"]},
+    })
+    monkeypatch.setattr(models, "_credential_fingerprint", lambda _provider: "plugin-fp")
+    assert models.cached_provider_model_ids("azure") == ["plugin-cache-model"]
+
+    provider_def = provider_defs.get_provider("azure", allow_network=False)
+    assert provider_def is not None
+    assert provider_def.id == profile.name
+    assert provider_def.base_url == ""
+    alias_def = provider_defs.resolve_provider_full("azure")
+    assert alias_def is not None
+    assert alias_def.id == profile.name
+    assert alias_def.source == "plugin-profile"
+    assert alias_def.base_url == ""
+
+    raw_config = {"model": {"provider": "azure", "default": "dynamic-azure-model"}}
+    monkeypatch.setattr(config, "read_user_config_raw", lambda _path: raw_config)
+    monkeypatch.setattr(auth, "get_auth_status", lambda *_args, **_kwargs: {"configured": True})
+    monkeypatch.setitem(__import__("sys").modules, "hermes_cli.doctor", SimpleNamespace(_DHH="~/.hermes"))
+    issues = []
+    doctor_config._validate_model_config("unused", issues)
+    assert not any("not a recognised provider" in issue for issue in issues)
+    assert not any("no API key is configured" in issue for issue in issues)
