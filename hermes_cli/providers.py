@@ -58,6 +58,10 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
     "alibaba-coding-plan": HermesOverlay(base_url_env_var="ALIBABA_CODING_PLAN_BASE_URL"),
     "vercel": HermesOverlay(is_aggregator=True),
     "opencode": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_ZEN_BASE_URL"),
+    # The plugin owns the ``opencode-zen`` identity and its aliases. Keep the
+    # built-in aggregator classification on that canonical plugin id too, so
+    # flat model catalogs remain discoverable after plugin-first normalization.
+    "opencode-zen": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_ZEN_BASE_URL"),
     "opencode-go": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_GO_BASE_URL"),
     "opencode-free": HermesOverlay(is_aggregator=True, base_url_override="https://opencode.ai/zen/v1", keyless=True),
     "kilo": HermesOverlay(is_aggregator=True, base_url_env_var="KILOCODE_BASE_URL"),
@@ -254,7 +258,8 @@ def is_aggregator(provider: str) -> bool:
 # ``vendor/model`` routing slugs — model_switch searches their flat catalog on that flag. But they
 # are NOT routing aggregators: every listed model is first-party under their own subscription, so
 # picker dedup (build_models_payload) must not strip a reseller's "minimax-m3" just because a
-# user's custom proxy serves a same-named model. Normalized ids: "opencode-zen" -> "opencode".
+# user's custom proxy serves a same-named model. Zen may normalize to either
+# ``opencode`` or ``opencode-zen`` depending on plugin identity availability.
 _FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset({"opencode-go", "opencode"})
 
 
@@ -263,7 +268,7 @@ def is_routing_aggregator(provider: str) -> bool:
     flat-namespace resellers whose catalog is first-party. Use for "would selecting this model
     silently re-route away from the intended provider?" (picker dedup)."""
     provider_norm = normalize_provider(provider or "")
-    if provider_norm in _FLAT_NAMESPACE_RESELLERS:
+    if provider_norm in _FLAT_NAMESPACE_RESELLERS or provider_norm == "opencode-zen":
         return False
     return is_aggregator(provider_norm)
 

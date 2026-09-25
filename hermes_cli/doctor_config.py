@@ -227,7 +227,9 @@ def _provider_has_credentials(runtime_provider: str, provider_def=None, config: 
             try:
                 from hermes_cli.runtime_provider import _try_resolve_from_custom_pool
                 provider_name = str(entry.get("provider_key") or provider_def.id.removeprefix("custom:") or "")
-                if _try_resolve_from_custom_pool(base_url, "custom", provider_name=provider_name):
+                if _try_resolve_from_custom_pool(
+                    base_url, "custom", provider_name=provider_name, read_only=True,
+                ):
                     return True
             except Exception:
                 pass

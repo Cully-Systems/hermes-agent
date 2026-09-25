@@ -115,7 +115,9 @@ def test_stale_chat_overridden_on_meta_direct():
         runtime_base_url="https://api.meta.ai/v1",
     )
     assert result.success, f"switch_model failed: {result.error_message}"
-    assert result.target_provider == "meta"
+    # The Meta plugin owns the public ``meta`` alias; model switches persist
+    # its canonical identity so subsequent runtime lookups stay on that profile.
+    assert result.target_provider == "meta-ai"
     assert result.new_model == "muse-spark-1.2"
     assert result.api_mode == "codex_responses"
 

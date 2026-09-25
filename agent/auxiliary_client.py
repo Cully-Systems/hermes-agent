@@ -4875,6 +4875,14 @@ def resolve_provider_client(
     )
     branch = _EXPLICIT_PROVIDER_BRANCHES.get(provider)
     if branch is not None:
+        if provider == "custom":
+            # Names such as ``local`` and ``ollama`` normalize to the generic
+            # custom route. Give an explicitly configured named endpoint the
+            # same chance it gets on non-alias names before falling back to the
+            # generic OPENAI_BASE_URL path.
+            named_custom = _resolve_named_custom_branch(req)
+            if named_custom is not None:
+                return named_custom
         return branch(req)
     # Named custom providers; an ImportError anywhere in the arm falls through to the built-ins.
     try:
