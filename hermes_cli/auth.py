@@ -17,6 +17,7 @@ import os
 import shutil
 import shlex
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -266,11 +267,20 @@ def _register_plugin_provider(pp: Any) -> None:
     External-process (ACP) providers have no API-key env vars; registering them is what lets an
     out-of-tree provider pass ``resolve_provider()``'s known-provider gate ("Unknown provider")."""
     pconfig = PROVIDER_REGISTRY.get(pp.name)
-    if pconfig is None:
+    bundled_module = sys.modules.get(f"plugins.model_providers.{pp.name.replace('-', '_')}")
+    bundled_profile_exists = bundled_module is not None and any(
+        getattr(value, "name", None) == pp.name for value in vars(bundled_module).values()
+    )
+    is_bundled_profile = bundled_profile_exists and any(
+        value is pp for value in vars(bundled_module).values()
+    )
+    if pconfig is None or (
+        bundled_profile_exists and not is_bundled_profile and pp.name not in _REGISTRY_PLUGIN_SKIP
+    ):
         if pp.auth_type == "external_process":
             pconfig = ProviderConfig(
                 pp.name, pp.display_name or pp.name, "external_process", inference_base_url=pp.base_url)
-        elif pp.auth_type == "api_key" and pp.env_vars and pp.name not in _REGISTRY_PLUGIN_SKIP:
+        elif pp.auth_type == "api_key" and pp.name not in _REGISTRY_PLUGIN_SKIP:
             is_url = lambda v: v.endswith("_BASE_URL") or v.endswith("_URL")  # noqa: E731
             pconfig = _api_key_provider(
                 pp.name, pp.display_name or pp.name, pp.base_url,
@@ -2002,10 +2012,15 @@ def _get_azure_foundry_auth_status() -> Dict[str, Any]:
             info["error"] = f"azure-identity check failed: {exc}"
         return info
 
-    try:
-        api_key = get_env_value_prefer_dotenv("AZURE_FOUNDRY_API_KEY") or ""
-    except Exception:
-        api_key = os.getenv("AZURE_FOUNDRY_API_KEY", "")
+    foundry_config = PROVIDER_REGISTRY.get("azure-foundry")
+    if foundry_config and foundry_config.auth_type == "api_key":
+        api_key, key_source = _resolve_api_key_provider_secret("azure-foundry", foundry_config)
+        info["key_source"] = key_source or ""
+    else:
+        try:
+            api_key = get_env_value_prefer_dotenv("AZURE_FOUNDRY_API_KEY") or ""
+        except Exception:
+            api_key = os.getenv("AZURE_FOUNDRY_API_KEY", "")
     info["logged_in"] = has_usable_secret(api_key)
     return info
 

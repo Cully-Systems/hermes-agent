@@ -41,6 +41,9 @@ def test_azure_foundry_registration_aliases_and_pool_runtime(monkeypatch, tmp_pa
         provider="azure-foundry", id=uuid.uuid4().hex[:6], label="api-key-1", auth_type=AUTH_TYPE_API_KEY,
         priority=0, source=SOURCE_MANUAL, access_token="az-pool-key",
     ))
+    status = auth.get_auth_status("azure-foundry")
+    assert status["logged_in"] is True
+    assert status["key_source"] == "credential_pool:azure-foundry"
 
     resolved = rp.resolve_runtime_provider(requested="azure")
     assert resolved["provider"] == "azure-foundry"
@@ -50,13 +53,15 @@ def test_azure_foundry_registration_aliases_and_pool_runtime(monkeypatch, tmp_pa
     assert get_transport(resolved["api_mode"]) is not None
 
 
-def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusions(monkeypatch):
+def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusions(monkeypatch, tmp_path):
     from agent import auxiliary_client as aux
     import providers as provider_registry
 
     real_list_providers = provider_registry.list_providers
     real_get_provider_aliases = provider_registry.get_provider_aliases
     real_get_provider_profile = provider_registry.get_provider_profile
+    original_profiles = provider_registry._REGISTRY.copy()
+    original_aliases = provider_registry._ALIASES.copy()
     real_resolve_runtime_provider = rp.resolve_runtime_provider
     real_ladder_rungs = rp._ladder_rungs
 
@@ -175,28 +180,48 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     monkeypatch.setattr(rp, "has_named_custom_provider", lambda _provider: False)
     assert rp._resolve_requested_shortcuts("claude", None, None, None) is None
 
-    # Same-name replacement preserves the registry's original list slot, but
-    # alias ownership follows actual registration order. The Anthropic profile
-    # must not reclaim claude after a later Azure Foundry override registers it.
-    monkeypatch.setattr(provider_registry, "_REGISTRY", {})
-    monkeypatch.setattr(provider_registry, "_ALIASES", {})
+    # Load a real user profile through the provider discovery loader. A later
+    # same-name override owns its alias and must rebuild auth's registry config
+    # from the winning profile rather than reusing the bundled Foundry settings.
+    monkeypatch.setattr(provider_registry, "_REGISTRY", original_profiles.copy())
+    monkeypatch.setattr(provider_registry, "_ALIASES", original_aliases.copy())
     monkeypatch.setattr(provider_registry, "_discovered", True)
     monkeypatch.setattr(provider_registry, "_PROVIDER_LIST_CACHE", None)
     monkeypatch.setattr(provider_registry, "list_providers", real_list_providers)
     monkeypatch.setattr(provider_registry, "get_provider_aliases", real_get_provider_aliases)
     monkeypatch.setattr(provider_registry, "get_provider_profile", real_get_provider_profile)
-    provider_registry.register_provider(ProviderProfile(name="azure-foundry"))
-    provider_registry.register_provider(ProviderProfile(name="anthropic", aliases=("claude",)))
-    azure_override = ProviderProfile(
-        name="azure-foundry", aliases=("claude", "azure-custom"),
-        env_vars=("CUSTOM_AZURE_API_KEY", "CUSTOM_AZURE_BASE_URL"),
-        base_url="https://custom-azure.example/v1",
+    plugin_dir = tmp_path / "hermes-home" / "plugins" / "model-providers" / f"azure-foundry-override-{uuid.uuid4().hex}"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "__init__.py").write_text(
+        "from providers import register_provider\n"
+        "from providers.base import ProviderProfile\n"
+        "register_provider(ProviderProfile(\n"
+        "    name='azure-foundry', aliases=('azure-custom',),\n"
+        "    env_vars=('CUSTOM_AZURE_API_KEY', 'CUSTOM_AZURE_BASE_URL'),\n"
+        "    base_url='https://custom-azure.example/v1',\n"
+        "))\n",
+        encoding="utf-8",
     )
-    provider_registry.register_provider(azure_override)
-    listed = provider_registry.list_providers()
-    assert [profile.name for profile in listed] == ["azure-foundry", "anthropic"]
-    assert auth._plugin_aliases()["claude"] == "azure-foundry"
-    assert auth.resolve_provider("claude") == "azure-foundry"
+    provider_registry._import_plugin_dir(plugin_dir, "user")
+    azure_override = provider_registry.get_provider_profile("azure-foundry")
+    assert azure_override is not None
+    assert provider_registry.get_provider_profile("azure-custom") is azure_override
+    assert auth._plugin_aliases()["azure-custom"] == "azure-foundry"
+    assert auth.resolve_provider("azure-custom") == "azure-foundry"
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
+    monkeypatch.setenv("CUSTOM_AZURE_API_KEY", "custom-profile-key")
+    monkeypatch.setenv("CUSTOM_AZURE_BASE_URL", "https://custom-azure.example/v1")
+    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "stale-bundled-key")
+    old_config = auth.PROVIDER_REGISTRY["azure-foundry"]
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "azure-foundry", old_config)
+    monkeypatch.delitem(auth.PROVIDER_REGISTRY, "azure-custom", raising=False)
+    for alias in ("azure", "azure-ai-foundry", "azure-ai"):
+        monkeypatch.setitem(auth.PROVIDER_REGISTRY, alias, auth.PROVIDER_REGISTRY[alias])
+    auth._register_plugin_provider(azure_override)
+    monkeypatch.setattr(rp, "PROVIDER_REGISTRY", auth.PROVIDER_REGISTRY)
+    assert auth.PROVIDER_REGISTRY["azure-foundry"].api_key_env_vars == ("CUSTOM_AZURE_API_KEY",)
+    assert auth.PROVIDER_REGISTRY["azure-foundry"].base_url_env_var == "CUSTOM_AZURE_BASE_URL"
     assert rp._resolve_requested_shortcuts("azure-custom", None, None, None) is None
 
     # The same-name override must flow through the ordinary profile-backed API-key
@@ -204,19 +229,11 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     # Foundry shortcut (which requires Azure-specific config and keys).
     monkeypatch.setattr(rp._config_mod, "load_config", lambda: {"model": {"provider": "azure-custom"}})
     monkeypatch.setattr(rp, "_get_model_config", lambda: {"provider": "azure-custom"})
+    monkeypatch.setattr(rp._config_mod, "load_config", lambda: {"model": {"provider": "azure-custom"}})
     monkeypatch.setattr(rp, "_resolve_from_pool", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rp, "resolve_api_key_provider_credentials", lambda provider: {
-        "provider": provider, "api_key": "custom-profile-key", "base_url": azure_override.base_url,
-        "source": "env",
-    })
-    monkeypatch.setattr(rp, "PROVIDER_REGISTRY", dict(rp.PROVIDER_REGISTRY))
-    monkeypatch.setitem(rp.PROVIDER_REGISTRY, "azure-foundry", auth._api_key_provider(
-        "azure-foundry", "Azure Foundry override", azure_override.base_url,
-        ("CUSTOM_AZURE_API_KEY",), "CUSTOM_AZURE_BASE_URL",
-    ))
     monkeypatch.setattr(rp, "resolve_runtime_provider", real_resolve_runtime_provider)
     monkeypatch.setattr(rp, "_ladder_rungs", real_ladder_rungs)
     custom_runtime = rp.resolve_runtime_provider(requested="azure-custom")
     assert custom_runtime["provider"] == "azure-foundry"
     assert custom_runtime["api_key"] == "custom-profile-key"
-    assert custom_runtime["base_url"] == azure_override.base_url
+    assert custom_runtime["base_url"] == "https://custom-azure.example/v1"
