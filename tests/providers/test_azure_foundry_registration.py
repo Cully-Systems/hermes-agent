@@ -141,3 +141,16 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     assert client["api_key"] == "pool-key"
     assert client["base_url"] == pooled["base_url"]
     assert model == "deployment"
+
+    # Discovered provider aliases obey the same last-writer-wins rule as profile
+    # registration and must take precedence over the static Azure Foundry shortcut.
+    from providers.base import ProviderProfile
+
+    custom_profile = ProviderProfile(name="custom-azure", aliases=("azure",))
+    monkeypatch.setattr("providers.list_providers", lambda: [custom_profile])
+    monkeypatch.setitem(auth.PROVIDER_REGISTRY, "custom-azure", auth.ProviderConfig(
+        id="custom-azure", name="Custom Azure", auth_type="api_key"))
+    assert auth._plugin_aliases()["azure"] == "custom-azure"
+    assert auth.resolve_provider("azure") == "custom-azure"
+    monkeypatch.setattr(rp, "has_named_custom_provider", lambda _provider: False)
+    assert rp._resolve_requested_shortcuts("azure", None, None, None) is None

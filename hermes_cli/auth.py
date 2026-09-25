@@ -1305,7 +1305,10 @@ def _plugin_aliases() -> Dict[str, str]:
         from providers import list_providers as _lp
         for _pp in _lp():
             for _alias in _pp.aliases:
-                aliases.setdefault(_alias, _pp.name)
+                # Plugin registry precedence is last-writer-wins, including aliases.
+                # A declared plugin alias must be able to override a built-in shortcut
+                # such as ``azure`` and route through that plugin's auth/runtime.
+                aliases[_alias] = _pp.name
     except Exception:
         pass
     return aliases
