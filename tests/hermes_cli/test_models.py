@@ -1519,3 +1519,11 @@ class TestLocalOllamaModelDiscovery:
 
         assert result.success is True
         assert result.api_key == "no-key-required"
+
+
+def test_generic_custom_profile_does_not_claim_local_runtime_aliases():
+    from hermes_cli.models import normalize_provider
+
+    assert normalize_provider("local") == "local"
+    assert normalize_provider("vllm") == "vllm"
+    assert normalize_provider("llama.cpp") == "llama.cpp"

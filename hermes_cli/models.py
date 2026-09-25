@@ -935,7 +935,7 @@ def normalize_provider(provider: Optional[str]) -> str:
         from providers import get_provider_profile
 
         profile = get_provider_profile(normalized)
-        if profile and (normalized == profile.name or normalized in profile.aliases):
+        if profile and (normalized == profile.name or (profile.name != "custom" and normalized in profile.aliases)):
             return profile.name
     except Exception:
         pass
