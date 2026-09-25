@@ -917,6 +917,16 @@ def normalize_provider(provider: Optional[str]) -> str:
     """Normalize provider aliases to canonical ids. ``"auto"`` passes through — use
     ``hermes_cli.auth.resolve_provider()`` to resolve it from credentials."""
     normalized = (provider or "openrouter").strip().lower()
+    # A configured named endpoint owns its identifier before a discovered profile
+    # alias can claim the same spelling (for example providers.azure vs the
+    # bundled Azure Foundry profile's `azure` alias).
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        if _get_named_custom_provider(normalized):
+            return normalized
+    except Exception:
+        pass
     # Discovered model-provider profiles use last-registration-wins for aliases,
     # including aliases that overlap this static compatibility table (for example
     # a user plugin claiming ``azure``). Preserve that identity for catalogs and
@@ -1281,6 +1291,20 @@ def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
     curated entries stop polluting the top. Plugin providers without a static entry use the
     profile's ``fallback_models`` as the curated list (Fireworks lists an image model first).
     """
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        custom = _get_named_custom_provider(normalized)
+    except Exception:
+        custom = None
+    if custom:
+        base_url = str(custom.get("base_url") or "").strip()
+        api_key = str(custom.get("api_key") or custom.get("key") or "").strip()
+        if base_url:
+            mode = custom.get("api_mode")
+            live = fetch_api_models(api_key, base_url, api_mode=mode)
+            return live or None
+
     from providers import get_provider_profile
 
     profile = get_provider_profile(normalized)

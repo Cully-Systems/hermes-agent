@@ -237,3 +237,19 @@ def test_azure_alias_policy_preserves_custom_precedence_and_auto_detect_exclusio
     assert custom_runtime["provider"] == "azure-foundry"
     assert custom_runtime["api_key"] == "custom-profile-key"
     assert custom_runtime["base_url"] == "https://custom-azure.example/v1"
+
+
+def test_named_azure_custom_endpoint_owns_catalog_identity(monkeypatch):
+    from hermes_cli import models
+    from hermes_cli import runtime_provider_custom
+
+    custom = {"name": "azure", "api_key": "custom-key", "base_url": "https://custom.example/v1"}
+    monkeypatch.setattr(runtime_provider_custom, "_get_named_custom_provider",
+                        lambda name: custom if name == "azure" else None)
+    assert models.normalize_provider("azure") == "azure"
+
+    calls = []
+    monkeypatch.setattr(models, "fetch_api_models",
+                        lambda key, base_url, **kwargs: calls.append((key, base_url)) or ["custom-model"])
+    assert models._profile_live_catalog("azure") == ["custom-model"]
+    assert calls == [("custom-key", "https://custom.example/v1")]
