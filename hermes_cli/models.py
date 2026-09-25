@@ -1298,11 +1298,24 @@ def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
     except Exception:
         custom = None
     if custom:
-        base_url = str(custom.get("base_url") or "").strip()
-        api_key = str(custom.get("api_key") or custom.get("key") or "").strip()
-        if base_url:
-            mode = custom.get("api_mode")
-            live = fetch_api_models(api_key, base_url, api_mode=mode)
+        try:
+            from hermes_cli.runtime_provider_custom import _resolve_named_custom_runtime
+
+            runtime = _resolve_named_custom_runtime(requested_provider=normalized)
+        except Exception:
+            runtime = None
+        if runtime:
+            base_url = str(runtime.get("base_url") or "").strip()
+            api_key = runtime.get("api_key") or ""
+            if callable(api_key):
+                try:
+                    api_key = api_key()
+                except Exception:
+                    api_key = ""
+            live = fetch_api_models(
+                str(api_key or ""), base_url, api_mode=runtime.get("api_mode"),
+                headers=runtime.get("extra_headers"),
+            )
             return live or None
 
     from providers import get_provider_profile
@@ -1438,6 +1451,27 @@ def _credential_fingerprint(provider: str) -> str:
         return "keyless:" + (provider or "").strip().lower()
 
     parts: list[str] = []
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        named = _get_named_custom_provider(provider)
+        if named:
+            key_env = str(named.get("key_env") or "").strip()
+            parts.extend([
+                f"named_custom.base_url={named.get('base_url', '')}",
+                f"named_custom.api_key={named.get('api_key', '')}",
+                f"named_custom.key_env={key_env}",
+                f"named_custom.key_env_value={os.environ.get(key_env, '') if key_env else ''}",
+                f"named_custom.key_cmd={named.get('key_cmd', '')}",
+                f"named_custom.api_mode={named.get('api_mode', '')}",
+                "named_custom.extra_headers="
+                + json.dumps(named.get("extra_headers", {}), sort_keys=True, default=str),
+            ])
+            # Host-gated fallback keys can also authenticate a named endpoint.
+            for key_name in ("CUSTOM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+                parts.append(f"{key_name}={os.environ.get(key_name, '')}")
+    except Exception:
+        pass
     try:
         from hermes_cli.auth import PROVIDER_REGISTRY
         pcfg = PROVIDER_REGISTRY.get(provider)

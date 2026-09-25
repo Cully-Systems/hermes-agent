@@ -246,10 +246,36 @@ def test_named_azure_custom_endpoint_owns_catalog_identity(monkeypatch):
     custom = {"name": "azure", "api_key": "custom-key", "base_url": "https://custom.example/v1"}
     monkeypatch.setattr(runtime_provider_custom, "_get_named_custom_provider",
                         lambda name: custom if name == "azure" else None)
+    monkeypatch.setattr(runtime_provider_custom, "_resolve_named_custom_runtime",
+                        lambda **_kwargs: {"api_key": "pool-or-command-key", "base_url": custom["base_url"],
+                                           "api_mode": "chat_completions", "extra_headers": {"X-Tenant": "tenant"}})
     assert models.normalize_provider("azure") == "azure"
 
     calls = []
-    monkeypatch.setattr(models, "fetch_api_models",
-                        lambda key, base_url, **kwargs: calls.append((key, base_url)) or ["custom-model"])
+    monkeypatch.setattr(models, "fetch_api_models", lambda key, base_url, **kwargs:
+                        calls.append((key, base_url, kwargs)) or ["custom-model"])
     assert models._profile_live_catalog("azure") == ["custom-model"]
-    assert calls == [("custom-key", "https://custom.example/v1")]
+    assert calls == [("pool-or-command-key", "https://custom.example/v1", {
+        "api_mode": "chat_completions", "headers": {"X-Tenant": "tenant"},
+    })]
+
+
+def test_named_custom_catalog_fingerprint_tracks_endpoint_and_auth_inputs(monkeypatch):
+    from hermes_cli import models, runtime_provider_custom
+
+    named = {"name": "azure", "base_url": "https://one.example/v1", "api_key": "key-one",
+             "key_env": "AZURE_CUSTOM_KEY", "key_cmd": "token-command", "api_mode": "chat_completions",
+             "extra_headers": {"X-Tenant": "one"}}
+    monkeypatch.setattr(runtime_provider_custom, "_get_named_custom_provider",
+                        lambda _name: named)
+    first = models._credential_fingerprint("azure")
+    named["base_url"] = "https://two.example/v1"
+    named["api_key"] = "key-two"
+    named["extra_headers"] = {"X-Tenant": "two"}
+    second = models._credential_fingerprint("azure")
+    assert first != second
+
+    monkeypatch.setenv("AZURE_CUSTOM_KEY", "env-key-one")
+    third = models._credential_fingerprint("azure")
+    monkeypatch.setenv("AZURE_CUSTOM_KEY", "env-key-two")
+    assert third != models._credential_fingerprint("azure")
