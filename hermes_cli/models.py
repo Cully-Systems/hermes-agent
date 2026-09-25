@@ -1444,16 +1444,14 @@ def _credential_fingerprint(provider: str) -> str:
     base-url env vars from ``PROVIDER_REGISTRY`` plus the mtimes of ``auth.json`` and external
     credential files (OAuth re-auth busts the cache without parsing every file shape)."""
     import hashlib
-    import hmac
 
     def _secret_fingerprint(value: Any) -> str:
-        # HMAC is used here as a stable, one-way cache marker; raw credentials and
-        # secret-bearing headers must never enter the on-disk catalog fingerprint.
-        return hmac.new(
-            b"hermes-provider-catalog-cache-v1",
+        # Use a slow KDF for secret-bearing inputs so the persisted cache marker
+        # is stable but cannot act as a fast offline credential verifier.
+        return hashlib.scrypt(
             str(value or "").encode("utf-8", errors="replace"),
-            hashlib.sha256,
-        ).hexdigest()
+            salt=b"hermes-provider-catalog-cache-v1", n=2**12, r=8, p=1, dklen=16,
+        ).hex()
 
     # Keyless providers serve the catalog anonymously: nothing the user rotates should invalidate
     # the entry, so a stable fingerprint keeps the SWR cache alive and busts only on TTL expiry.
