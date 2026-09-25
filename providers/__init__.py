@@ -97,6 +97,18 @@ def list_providers() -> list[ProviderProfile]:
     return list(result)
 
 
+def get_provider_aliases() -> dict[str, str]:
+    """Return the authoritative alias-to-profile mapping.
+
+    Unlike rebuilding aliases from :func:`list_providers`, this preserves the
+    actual registration order when a later profile replaces an existing name
+    in ``_REGISTRY`` (dict replacement does not move its insertion slot).
+    """
+    if not _discovered:
+        _discover_providers()
+    return dict(_ALIASES)
+
+
 def _user_plugins_dir() -> Path | None:
     """Return ``$HERMES_HOME/plugins/model-providers/`` if it exists."""
     try:

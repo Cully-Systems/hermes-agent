@@ -14,7 +14,7 @@ from hermes_cli.auth import AuthError, resolve_provider
 from hermes_cli.colors import Colors, color
 from hermes_cli.config import get_env_path, get_env_value, get_hermes_home, load_config
 from hermes_cli.models import provider_label
-from hermes_cli.runtime_provider import resolve_requested_provider
+from hermes_cli.runtime_provider import has_named_custom_provider, resolve_requested_provider
 from hermes_cli.vercel_auth import describe_vercel_auth
 from hermes_cli.status_auth import (  # renderers wired into _SECTIONS below
     _render_api_keys, _render_apikey_providers, _render_auth_providers, _render_nous_gateway)
@@ -72,6 +72,34 @@ def _configured_model_label(config: dict) -> str:
 def _effective_provider_label() -> str:
     """Return the provider label matching current CLI runtime resolution."""
     requested = resolve_requested_provider()
+    config = {}
+    try:
+        config = load_config()
+        model_cfg = config.get("model") if isinstance(config, dict) else None
+    except Exception:
+        model_cfg = None
+    raw_configured = str(model_cfg.get("provider") or "").strip().lower() if isinstance(model_cfg, dict) else ""
+    custom_identity = next((name for name in (requested, raw_configured)
+                            if name and name != "auto" and has_named_custom_provider(name)), "")
+    if custom_identity:
+        from hermes_cli.providers import custom_provider_aliases
+
+        configured = config.get("providers") if isinstance(config, dict) else None
+        if isinstance(configured, dict):
+            for key, entry in configured.items():
+                if not isinstance(entry, dict):
+                    continue
+                if custom_identity in custom_provider_aliases(str(entry.get("name") or key), str(key)):
+                    return str(entry.get("name") or key)
+        legacy = config.get("custom_providers") if isinstance(config, dict) else None
+        if isinstance(legacy, list):
+            for entry in legacy:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or "")
+                if custom_identity in custom_provider_aliases(name, str(entry.get("provider_key") or "")):
+                    return name or f"Custom ({custom_identity})"
+        return f"Custom ({custom_identity})"
     try:
         effective = resolve_provider(requested)
     except AuthError:
@@ -80,10 +108,6 @@ def _effective_provider_label() -> str:
     if effective == "openrouter":
         # A custom endpoint may live in config.yaml (model.base_url, the canonical location) or
         # the legacy OPENAI_BASE_URL env var; either way labeling it "OpenRouter" is misleading.
-        try:
-            model_cfg = load_config().get("model")
-        except Exception:
-            model_cfg = None
         config_base_url = (model_cfg.get("base_url") or "").strip() if isinstance(model_cfg, dict) else ""
         if config_base_url or get_env_value("OPENAI_BASE_URL"):
             effective = "custom"

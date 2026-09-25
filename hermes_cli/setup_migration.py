@@ -32,9 +32,10 @@ def _model_section_has_credentials(config: dict) -> bool:
     except Exception:
         pass
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
+        from hermes_cli.auth import PROVIDER_REGISTRY, iter_unique_provider_configs
     except Exception:
         PROVIDER_REGISTRY = {}  # type: ignore[assignment]
+        iter_unique_provider_configs = lambda: iter(())
 
     def _has_key(pconfig) -> bool:
         # CLAUDE_CODE_OAUTH_TOKEN is set by Claude Code itself, not by the user —
@@ -58,7 +59,7 @@ def _model_section_has_credentials(config: dict) -> bool:
         return True
     # Skip copilot in auto-detect: GH_TOKEN / GITHUB_TOKEN are commonly set for git tooling.
     # Mirrors resolve_provider in auth.py.
-    return any(_has_key(pconfig) for pid, pconfig in PROVIDER_REGISTRY.items() if pid != "copilot")
+    return any(_has_key(pconfig) for pconfig in iter_unique_provider_configs() if pconfig.id != "copilot")
 
 
 def _model_summary(config: dict) -> Optional[str]:

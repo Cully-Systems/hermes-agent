@@ -31,7 +31,19 @@ def _azure_current(config) -> _AzureCurrent:
 
     cur = _AzureCurrent(api_key=get_env_value("AZURE_FOUNDRY_API_KEY") or "")
     model_cfg = config.get("model", {})
-    if isinstance(model_cfg, dict) and model_cfg.get("provider") == "azure-foundry":
+    provider = str(model_cfg.get("provider") or "").strip().lower() if isinstance(model_cfg, dict) else ""
+    try:
+        from hermes_cli.runtime_provider import has_named_custom_provider
+        is_named_custom = has_named_custom_provider(provider)
+    except Exception:
+        is_named_custom = False
+    if not is_named_custom:
+        try:
+            from hermes_cli.auth import _plugin_aliases
+            provider = _plugin_aliases().get(provider, provider)
+        except Exception:
+            pass
+    if isinstance(model_cfg, dict) and provider == "azure-foundry":
         cur.base_url = str(model_cfg.get("base_url", "") or "")
         cur.api_mode = str(model_cfg.get("api_mode", "") or "")
         cur.auth_mode = str(model_cfg.get("auth_mode") or "api_key").strip().lower() or "api_key"

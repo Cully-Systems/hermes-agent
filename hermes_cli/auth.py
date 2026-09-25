@@ -17,6 +17,7 @@ import os
 import shutil
 import shlex
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -265,27 +266,55 @@ def _register_plugin_provider(pp: Any) -> None:
 
     External-process (ACP) providers have no API-key env vars; registering them is what lets an
     out-of-tree provider pass ``resolve_provider()``'s known-provider gate ("Unknown provider")."""
-    if pp.auth_type == "external_process":
-        pconfig = ProviderConfig(
-            pp.name, pp.display_name or pp.name, "external_process", inference_base_url=pp.base_url)
-    elif pp.auth_type == "api_key" and pp.env_vars and pp.name not in _REGISTRY_PLUGIN_SKIP:
-        is_url = lambda v: v.endswith("_BASE_URL") or v.endswith("_URL")  # noqa: E731
-        pconfig = _api_key_provider(
-            pp.name, pp.display_name or pp.name, pp.base_url,
-            tuple(v for v in pp.env_vars if not is_url(v)) or pp.env_vars,
-            next((v for v in pp.env_vars if is_url(v)), None) or "")
-    else:
-        return
+    pconfig = PROVIDER_REGISTRY.get(pp.name)
+    bundled_module = sys.modules.get(f"plugins.model_providers.{pp.name.replace('-', '_')}")
+    bundled_profile_exists = bundled_module is not None and any(
+        getattr(value, "name", None) == pp.name for value in vars(bundled_module).values()
+    )
+    is_bundled_profile = bundled_profile_exists and any(
+        value is pp for value in vars(bundled_module).values()
+    )
+    if pconfig is None or (
+        bundled_profile_exists and not is_bundled_profile and pp.name not in _REGISTRY_PLUGIN_SKIP
+    ):
+        if pp.auth_type == "external_process":
+            pconfig = ProviderConfig(
+                pp.name, pp.display_name or pp.name, "external_process", inference_base_url=pp.base_url)
+        elif pp.auth_type == "api_key" and pp.name not in _REGISTRY_PLUGIN_SKIP:
+            is_url = lambda v: v.endswith("_BASE_URL") or v.endswith("_URL")  # noqa: E731
+            pconfig = _api_key_provider(
+                pp.name, pp.display_name or pp.name, pp.base_url,
+                tuple(v for v in pp.env_vars if not is_url(v)) or pp.env_vars,
+                next((v for v in pp.env_vars if is_url(v)), None) or "")
+        else:
+            return
     PROVIDER_REGISTRY[pp.name] = pconfig
-    for alias in pp.aliases:  # so resolve_provider() resolves them too
-        PROVIDER_REGISTRY.setdefault(alias, pconfig)
+    # Preserve the public alias lookup contract using the registry's actual
+    # last-writer-wins ownership. A profile replacing an existing registry name
+    # keeps that name's dict insertion slot, so list_providers() order cannot
+    # safely decide which provider owns a colliding alias.
+    from providers import get_provider_aliases
+
+    alias_owners = get_provider_aliases()
+    for alias in pp.aliases:
+        if alias_owners.get(alias) == pp.name:
+            PROVIDER_REGISTRY[alias] = pconfig
+
+
+def iter_unique_provider_configs():
+    """Iterate canonical provider configs once, even when plugin aliases are registered."""
+    seen = set()
+    for pconfig in PROVIDER_REGISTRY.values():
+        if pconfig.id in seen:
+            continue
+        seen.add(pconfig.id)
+        yield pconfig
 
 
 try:
     from providers import list_providers as _list_providers_for_registry
     for _pp in _list_providers_for_registry():
-        if _pp.name not in PROVIDER_REGISTRY:
-            _register_plugin_provider(_pp)
+        _register_plugin_provider(_pp)
 except Exception:
     pass
 
@@ -1281,17 +1310,21 @@ _PROVIDER_ALIASES: Dict[str, str] = {
     # Local server aliases — route through the generic custom provider
     "ollama": "custom", "ollama_cloud": "ollama-cloud",
     "vllm": "custom", "llamacpp": "custom",
-    "llama.cpp": "custom", "llama-cpp": "custom"}
+    "llama.cpp": "custom", "llama-cpp": "custom",
+    "azure": "azure-foundry", "azure-ai-foundry": "azure-foundry", "azure-ai": "azure-foundry"}
 
 
 def _plugin_aliases() -> Dict[str, str]:
     """``_PROVIDER_ALIASES`` extended with aliases declared in plugins/model-providers/<name>/."""
     aliases = dict(_PROVIDER_ALIASES)
     try:
-        from providers import list_providers as _lp
-        for _pp in _lp():
-            for _alias in _pp.aliases:
-                aliases.setdefault(_alias, _pp.name)
+        from providers import get_provider_aliases
+
+        # Use the registration map directly. Rebuilding this from list_providers()
+        # loses registration order when a same-name profile is replaced in-place
+        # in the registry (for example, a user Azure Foundry plugin claiming claude).
+        # The authoritative map already records the last registered alias owner.
+        aliases.update(get_provider_aliases())
     except Exception:
         pass
     return aliases
@@ -1358,7 +1391,20 @@ def _config_model_provider() -> Tuple[Any, Optional[str]]:
         model_cfg = (load_config() or {}).get("model")
         provider = model_cfg.get("provider") if isinstance(model_cfg, dict) else None
         provider = provider.strip().lower() if isinstance(provider, str) else ""
-        return model_cfg, (provider if provider in PROVIDER_REGISTRY else None)
+        canonical = _plugin_aliases().get(provider, provider)
+        if canonical != provider and canonical in PROVIDER_REGISTRY:
+            # Named custom providers intentionally win when their name collides with a built-in
+            # alias. Keep the auto-resolution safety path consistent with runtime routing.
+            try:
+                from hermes_cli.runtime_provider import has_named_custom_provider
+                if has_named_custom_provider(provider):
+                    return model_cfg, "custom"
+            except Exception as e:
+                logger.debug("Could not check custom-provider alias shadowing: %s", e)
+            return model_cfg, canonical
+        if provider in PROVIDER_REGISTRY:
+            return model_cfg, provider
+        return model_cfg, None
     except Exception as e:
         logger.debug("Could not read config.yaml model.provider for auto-resolution: %s", e)
         return None, None
@@ -1375,22 +1421,23 @@ def _env_key_auto_detected(
     scoped_key_env: Callable[[str], str], oauth_active: Optional[str]) -> Optional[str]:
     """First registry api_key provider (registry order) with a usable env key, warning when it
     preempts a logged-in OAuth provider so a stale key in ~/.hermes/.env never switches silently."""
+    seen_provider_ids = set()
     for pid, pconfig in PROVIDER_REGISTRY.items():
-        if pconfig.auth_type != "api_key" or pid in _NO_AUTO_DETECT_PROVIDERS:
+        canonical_id = pconfig.id
+        if canonical_id in seen_provider_ids:
+            continue
+        seen_provider_ids.add(canonical_id)
+        if pconfig.auth_type != "api_key" or canonical_id in _NO_AUTO_DETECT_PROVIDERS:
             continue
         for env_var in pconfig.api_key_env_vars:
             if has_usable_secret(scoped_key_env(env_var)):
-                if oauth_active and oauth_active != pid:
+                if oauth_active and oauth_active != canonical_id:
                     logger.warning(
-                        # An exported API key now wins over a logged-in OAuth provider (the #29285 fix).
-                        # Surface that so a user who deliberately uses OAuth but has a stale key in
-                        # ~/.hermes/.env isn't silently switched without knowing why.
-                        "Provider resolved to %r via %s, preempting your "
-                        "logged-in OAuth provider %r. If you meant to use the "
-                        "OAuth login, unset %s or set `model.provider` "
-                        "explicitly.",
-                        pid, env_var, oauth_active, env_var)
-                return pid
+                        "An exported API-key provider is preempting the logged-in OAuth provider. "
+                        "If you meant to use OAuth, unset the conflicting provider key or set "
+                        "`model.provider` explicitly."
+                    )
+                return canonical_id
     return None
 
 
@@ -1965,10 +2012,15 @@ def _get_azure_foundry_auth_status() -> Dict[str, Any]:
             info["error"] = f"azure-identity check failed: {exc}"
         return info
 
-    try:
-        api_key = get_env_value_prefer_dotenv("AZURE_FOUNDRY_API_KEY") or ""
-    except Exception:
-        api_key = os.getenv("AZURE_FOUNDRY_API_KEY", "")
+    foundry_config = PROVIDER_REGISTRY.get("azure-foundry")
+    if foundry_config and foundry_config.auth_type == "api_key":
+        api_key, key_source = _resolve_api_key_provider_secret("azure-foundry", foundry_config)
+        info["key_source"] = key_source or ""
+    else:
+        try:
+            api_key = get_env_value_prefer_dotenv("AZURE_FOUNDRY_API_KEY") or ""
+        except Exception:
+            api_key = os.getenv("AZURE_FOUNDRY_API_KEY", "")
     info["logged_in"] = has_usable_secret(api_key)
     return info
 
@@ -2117,8 +2169,23 @@ def _get_config_provider() -> Optional[str]:
 
 def _should_reset_config_provider_on_logout(provider_id: Optional[str]) -> bool:
     """True when logout should reset model.provider (a registry provider config.yaml selects)."""
+    normalize = _normalize_logout_provider_id
+    normalized = normalize(provider_id) if provider_id else ""
+    configured = _get_config_provider()
+    configured = normalize(configured) if configured else None
+    return normalized in PROVIDER_REGISTRY and configured == normalized
+
+
+def _normalize_logout_provider_id(provider_id: Optional[str]) -> str:
+    """Normalize an auth/logout target with the same custom/plugin precedence as auth commands."""
     normalized = (provider_id or "").strip().lower()
-    return normalized in PROVIDER_REGISTRY and _get_config_provider() == normalized
+    if not normalized:
+        return ""
+    # Keep alias ownership, including later plugin overrides and named custom providers,
+    # consistent with `hermes auth logout` and the other credential-pool commands.
+    from hermes_cli.auth_commands import _normalize_provider
+
+    return _normalize_provider(normalized)
 
 
 def _logout_default_provider_from_config() -> Optional[str]:
@@ -2175,7 +2242,8 @@ def logout_command(args) -> None:
     if provider_id and not is_known_auth_provider(provider_id):
         print(f"Unknown provider: {provider_id}")
         raise SystemExit(1)
-    target = provider_id or get_active_provider() or _logout_default_provider_from_config()
+    raw_target = provider_id or get_active_provider() or _logout_default_provider_from_config()
+    target = _normalize_logout_provider_id(raw_target) if raw_target else None
     if not target:
         print("No provider is currently logged in.")
         return

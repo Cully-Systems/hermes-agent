@@ -549,6 +549,7 @@ _PROVIDER_ALIASES = {
     "tencent": "tencent-tokenhub", "tokenhub": "tencent-tokenhub", "tencent-cloud": "tencent-tokenhub",
     "tencentmaas": "tencent-tokenhub",
     "tokenplan": "tencent-tokenplan", "tencent-lkeap": "tencent-tokenplan",
+    "azure": "azure-foundry", "azure-ai-foundry": "azure-foundry", "azure-ai": "azure-foundry",
 }
 
 
@@ -567,7 +568,14 @@ def _normalize_aux_provider(provider: Optional[str]) -> str:
         if not main_prov or main_prov in {"auto", "main"}:
             return "custom"
         normalized = main_prov
-    return _PROVIDER_ALIASES.get(normalized, normalized)
+    # Match main runtime provider resolution, including aliases contributed by
+    # dynamically discovered model-provider profiles.
+    try:
+        from hermes_cli.auth import _plugin_aliases
+        aliases = _plugin_aliases()
+    except Exception:
+        aliases = _PROVIDER_ALIASES
+    return aliases.get(normalized, _PROVIDER_ALIASES.get(normalized, normalized))
 
 
 # Sentinel from _fixed_temperature_for_model(): callers strip ``temperature`` entirely.
@@ -2017,20 +2025,25 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
     except ImportError:
         logger.debug("Could not import PROVIDER_REGISTRY for API-key fallback")
         return None, None
+    seen_provider_ids = set()
     for provider_id, pconfig in PROVIDER_REGISTRY.items():
+        canonical_id = pconfig.id
+        if canonical_id in seen_provider_ids:
+            continue
+        seen_provider_ids.add(canonical_id)
         if pconfig.auth_type != "api_key":
             continue
-        if _is_provider_unhealthy(provider_id):
-            logger.debug("Auxiliary api-key chain: %s is unhealthy, skipping", provider_id)
+        if _is_provider_unhealthy(canonical_id):
+            logger.debug("Auxiliary api-key chain: %s is unhealthy, skipping", canonical_id)
             continue
-        if provider_id == "anthropic":
+        if canonical_id == "anthropic":
             # Explicit-config gate: Claude Code credentials must not silently become aux fallback.
             with contextlib.suppress(ImportError):
                 from hermes_cli.auth import is_provider_explicitly_configured
                 if not is_provider_explicitly_configured("anthropic"):
                     continue
             return _try_anthropic()
-        pool_present, entry = _select_pool_entry(provider_id)
+        pool_present, entry = _select_pool_entry(canonical_id)
         if pool_present:
             api_key = _pool_runtime_api_key(entry)
             if not api_key:
@@ -2044,13 +2057,13 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
                 continue
             raw_base_url = str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
             via = ""
-        model = _get_aux_model_for_provider(provider_id) or None
+        model = _get_aux_model_for_provider(canonical_id) or None
         if model is None:
             continue  # skip provider if we don't know a valid aux model
         logger.debug("Auxiliary text client: %s (%s)%s", pconfig.name, model, via)
         # Native Gemini, else OpenAI-wire + Anthropic rewrap.
         base_url = _to_openai_base_url(raw_base_url)
-        if provider_id == "gemini":
+        if canonical_id == "gemini":
             from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
             if is_native_gemini_base_url(base_url):
                 return GeminiNativeClient(api_key=api_key, base_url=base_url), model
@@ -2062,7 +2075,7 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
         elif base_url_host_matches(base_url, "integrate.api.nvidia.com"):
             headers = build_nvidia_nim_headers(base_url)
         else:
-            headers = _profile_default_headers(provider_id)
+            headers = _profile_default_headers(canonical_id)
         extra = {"default_headers": headers} if headers else {}
         merged = _apply_user_default_headers(extra.get("default_headers"))
         if merged:
@@ -2747,10 +2760,10 @@ def _try_azure_foundry(
     *, model: Optional[str] = None, explicit_api_key: Optional[str] = None,
     explicit_base_url: Optional[str] = None, api_mode: Optional[str] = None,
 ) -> Tuple[Optional[Any], Optional[str]]:
-    """Azure Foundry aux client via the main agent's ``_resolve_azure_foundry_runtime`` (api_key vs Entra
+    """Azure Foundry aux client via the main runtime resolver (credential pool, api_key vs Entra
     callable bearer, per-model api_mode, base_url overrides). Returns ``(client, model)`` or ``(None, None)``."""
     try:
-        from hermes_cli.runtime_provider import _resolve_azure_foundry_runtime
+        from hermes_cli.runtime_provider import resolve_runtime_provider
         from hermes_cli.auth import AuthError
         from hermes_cli.config import load_config_readonly
     except ImportError:
@@ -2763,8 +2776,8 @@ def _try_azure_foundry(
     except Exception:
         model_cfg = {}
     try:
-        runtime = _resolve_azure_foundry_runtime(
-            requested_provider="azure-foundry", model_cfg=model_cfg,
+        runtime = resolve_runtime_provider(
+            requested="azure-foundry",
             explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
             target_model=model,
         )
@@ -2776,7 +2789,27 @@ def _try_azure_foundry(
         return None, None
     api_key = runtime.get("api_key")
     base_url = str(runtime.get("base_url", "") or "")
-    runtime_api_mode = api_mode or runtime.get("api_mode") or "chat_completions"
+    configured_api_mode = str(runtime.get("api_mode") or "chat_completions")
+    runtime_api_mode = api_mode or configured_api_mode
+    if api_mode:
+        # The shared resolver has already shaped the endpoint for the main model's
+        # transport. Rebase from the unmodified configured/explicit endpoint when
+        # available, then apply the auxiliary task's effective transport shape.
+        raw_endpoint = str(explicit_base_url or "").strip().rstrip("/")
+        if not raw_endpoint:
+            try:
+                from hermes_cli.runtime_provider import _cfg_provider_canonical
+                if _cfg_provider_canonical(model_cfg) == "azure-foundry":
+                    raw_endpoint = str(model_cfg.get("base_url") or "").strip().rstrip("/")
+            except Exception:
+                pass
+        if raw_endpoint:
+            base_url = raw_endpoint
+        if runtime_api_mode == "anthropic_messages":
+            base_url = re.sub(r"/v1/?$", "", base_url)
+        elif (configured_api_mode == "anthropic_messages" and not raw_endpoint
+              and urlparse(base_url).path.rstrip("/").endswith("/openai")):
+            base_url += "/v1"
     # api_key may be a callable token provider; bail only on None/"".
     if not (callable(api_key) or api_key) or not base_url:
         return None, None
@@ -4786,7 +4819,15 @@ def resolve_provider_client(
     # Keep the pre-alias name so a custom_providers entry named like a built-in alias
     # (e.g. "kimi" → "kimi-coding") is still reachable via the named-custom branch.
     original_provider = (provider or "").strip().lower()
-    provider = _normalize_aux_provider(provider)
+    if original_provider == "main":
+        raw_main_provider = (_read_main_provider() or "").strip().lower()
+        if raw_main_provider and raw_main_provider not in {"auto", "main"}:
+            original_provider = raw_main_provider
+            provider = _normalize_aux_provider(raw_main_provider)
+        else:
+            provider = _normalize_aux_provider(provider)
+    else:
+        provider = _normalize_aux_provider(provider)
     # MoA chokepoint: "moa" is not an HTTP provider; resolve to the aggregator so direct callers don't
     # dead-end in unknown-provider. Unresolvable preset → leave untouched for the normal diagnostic.
     if provider == "moa":
@@ -4834,6 +4875,14 @@ def resolve_provider_client(
     )
     branch = _EXPLICIT_PROVIDER_BRANCHES.get(provider)
     if branch is not None:
+        if provider == "custom":
+            # Names such as ``local`` and ``ollama`` normalize to the generic
+            # custom route. Give an explicitly configured named endpoint the
+            # same chance it gets on non-alias names before falling back to the
+            # generic OPENAI_BASE_URL path.
+            named_custom = _resolve_named_custom_branch(req)
+            if named_custom is not None:
+                return named_custom
         return branch(req)
     # Named custom providers; an ImportError anywhere in the arm falls through to the built-ins.
     try:
@@ -5037,7 +5086,17 @@ def resolve_vision_provider_client(
     requested, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         "vision", provider, model, base_url, api_key
     )
+    raw_requested = requested
     requested = _normalize_vision_provider(requested)
+    if raw_requested and raw_requested != requested:
+        # Keep a configured named custom provider's raw alias so the central
+        # resolver can apply the same alias-collision precedence as text calls.
+        try:
+            from hermes_cli.runtime_provider import _get_named_custom_provider
+            if _get_named_custom_provider(raw_requested) is not None:
+                requested = raw_requested
+        except Exception:
+            pass
     if resolved_base_url:
         provider_for_base_override = requested if requested and requested not in {"", "auto"} else "custom"
         client, final_model = resolve_provider_client(
@@ -5365,9 +5424,27 @@ def _get_cached_client(
     # and retry an exhausted key.
     effective_api_key = api_key
     if not effective_api_key:
-        _pe = _peek_pool_entry(_normalize_aux_provider(provider))
-        if _pe is not None:
-            effective_api_key = _pool_runtime_api_key(_pe) or api_key
+        normalized_provider = _normalize_aux_provider(provider)
+        preserve_foundry_entra = False
+        if normalized_provider == "azure-foundry":
+            try:
+                from hermes_cli.config import load_config_readonly
+                from hermes_cli.runtime_provider import _cfg_provider_canonical
+                cfg = load_config_readonly()
+                model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
+                if isinstance(model_cfg, dict):
+                    preserve_foundry_entra = (
+                        str(model_cfg.get("auth_mode") or "").strip().lower() == "entra_id"
+                        and _cfg_provider_canonical(model_cfg) == "azure-foundry"
+                    )
+            except Exception:
+                pass
+        # Do not turn a stale Foundry pool entry into an explicit API-key override:
+        # the shared resolver must be allowed to select the configured Entra token path.
+        if not preserve_foundry_entra:
+            _pe = _peek_pool_entry(normalized_provider)
+            if _pe is not None:
+                effective_api_key = _pool_runtime_api_key(_pe) or api_key
     client, default_model = resolve_provider_client(
         provider, model, async_mode, explicit_base_url=base_url, explicit_api_key=effective_api_key,
         api_mode=api_mode, main_runtime=runtime, is_vision=is_vision, task=task,

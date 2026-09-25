@@ -249,10 +249,23 @@ def _cfg_provider(model_cfg: Dict[str, Any]) -> str:
     return str(model_cfg.get("provider") or "").strip().lower()
 
 
+def _cfg_provider_canonical(model_cfg: Dict[str, Any]) -> str:
+    """Canonical model provider unless the raw name intentionally owns a named custom provider."""
+    raw = _cfg_provider(model_cfg)
+    if raw and has_named_custom_provider(raw):
+        return raw
+    return auth_mod._plugin_aliases().get(raw, raw)
+
+
 def _config_base_url_for_provider(model_cfg: Dict[str, Any], provider: str) -> str:
     """``model.base_url`` (stripped, no trailing slash) only when ``model.provider`` is
     ``provider`` — a stale base_url must not leak into another provider."""
-    return str(model_cfg.get("base_url") or "").strip().rstrip("/") if _cfg_provider(model_cfg) == provider else ""
+    provider_canon = provider if has_named_custom_provider(provider) else auth_mod._plugin_aliases().get(provider, provider)
+    return (
+        str(model_cfg.get("base_url") or "").strip().rstrip("/")
+        if _cfg_provider_canonical(model_cfg) == provider_canon
+        else ""
+    )
 
 
 def _anthropic_base_url_override_ok(base_url: str) -> bool:
@@ -441,9 +454,9 @@ def _pool_entry_mode_and_url(provider, entry, model_cfg, effective_model, base_u
     if provider == "copilot":
         api_mode = _copilot_runtime_api_mode(model_cfg, getattr(entry, "runtime_api_key", ""), target_model=effective_model)
         return api_mode, base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
-    if provider == "azure-foundry":
+    if provider == "azure-foundry" and _uses_bundled_azure_foundry_profile():
         api_mode = "chat_completions"
-        if _cfg_provider(model_cfg) == "azure-foundry":
+        if _cfg_provider_canonical(model_cfg) == "azure-foundry":
             base_url = _config_base_url_for_provider(model_cfg, "azure-foundry") or base_url
             api_mode = _parse_api_mode(model_cfg.get("api_mode")) or api_mode
         api_mode = _azure_inferred_api_mode(effective_model, api_mode)
@@ -604,6 +617,8 @@ def _resolve_explicit_runtime(*, provider: str, requested_provider: str, model_c
     if not explicit_api_key and not explicit_base_url:
         return None
     resolver = _EXPLICIT_RESOLVERS.get(provider)
+    if provider == "azure-foundry" and not _uses_bundled_azure_foundry_profile():
+        resolver = None
     if resolver is not None:
         return resolver(requested_provider, model_cfg, explicit_api_key, explicit_base_url, target_model)
     pconfig = PROVIDER_REGISTRY.get(provider)
@@ -738,6 +753,23 @@ def _raise_if_provider_disabled(requested_provider: str) -> None:
                          f"(providers.{requested_provider}.enabled: false)")
 
 
+def _uses_bundled_azure_foundry_profile() -> bool:
+    """Whether the active canonical Foundry profile is the bundled profile itself.
+
+    User profiles intentionally replace bundled profiles with the same name. The
+    Azure-specific resolver is only correct for the bundled profile's contract;
+    overrides must reach the ordinary registered-provider runtime, which uses
+    the active profile's endpoint and environment variables.
+    """
+    try:
+        from providers import get_provider_profile
+        from plugins.model_providers.azure_foundry import azure_foundry
+
+        return get_provider_profile("azure-foundry") is azure_foundry
+    except Exception:
+        return False
+
+
 def _resolve_vertex_runtime(requested_provider: str) -> Dict[str, Any]:
     """Vertex AI (OAuth2). The credential *path* (GOOGLE_APPLICATION_CREDENTIALS) must never be
     treated as a static API key; a short-lived token is minted per call, and mid-session expiry is
@@ -766,8 +798,55 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
                         requested_provider=requested_provider)
     # Azure Foundry resolves before the custom-runtime / pool / generic paths so its config is
     # always picked up from model.base_url + model.api_mode, with or without explicit_* args.
-    if requested_provider == "azure-foundry":
-        return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=_get_model_config(),
+    # Plugin aliases (azure, azure-ai-foundry, azure-ai) must take the same dedicated
+    # resolver as the canonical id. resolve_requested_provider() does not canonicalize,
+    # so a config of provider: azure previously skipped this shortcut and fell through
+    # to the generic api_key path (empty Foundry base_url → "no adapter" / AuthError).
+    if (
+        auth_mod._plugin_aliases().get(requested_provider, requested_provider) == "azure-foundry"
+        and _uses_bundled_azure_foundry_profile()
+        and not has_named_custom_provider(requested_provider)
+    ):
+        model_cfg = _get_model_config()
+        # `hermes auth add azure` stores credentials under the canonical Foundry pool. The
+        # shortcut normally runs before the generic pool rung, so select that entry here.
+        # Entra ID must keep its token path only while Foundry is still the configured
+        # main provider. A stale auth_mode left behind after switching providers must not
+        # suppress credentials explicitly requested from the canonical Foundry pool.
+        auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
+        configured_provider = _cfg_provider_canonical(model_cfg)
+        configured_foundry_entra = auth_mode == "entra_id" and configured_provider == "azure-foundry"
+        if not configured_foundry_entra and not explicit_api_key:
+            pooled = _resolve_from_pool("azure-foundry", requested_provider, model_cfg, explicit_api_key,
+                                        explicit_base_url, target_model)
+            if pooled:
+                # An explicit auxiliary endpoint overrides only the URL. Keep using a
+                # credential saved with `hermes auth add azure` when no key was supplied.
+                if explicit_base_url:
+                    return _resolve_azure_foundry_runtime(
+                        requested_provider=requested_provider,
+                        model_cfg=model_cfg,
+                        explicit_api_key=pooled.get("api_key"),
+                        explicit_base_url=explicit_base_url,
+                        target_model=target_model,
+                    )
+                if not str(pooled.get("base_url") or "").strip():
+                    env_base_url = _getenv("AZURE_FOUNDRY_BASE_URL", "").strip().rstrip("/")
+                    if env_base_url:
+                        pooled["base_url"] = (
+                            re.sub(r"/v1/?$", "", env_base_url)
+                            if pooled.get("api_mode") == "anthropic_messages" else env_base_url
+                        )
+                if str(pooled.get("base_url") or "").strip():
+                    return pooled
+                return _resolve_azure_foundry_runtime(
+                    requested_provider=requested_provider,
+                    model_cfg=model_cfg,
+                    explicit_api_key=pooled.get("api_key"),
+                    explicit_base_url=explicit_base_url,
+                    target_model=target_model,
+                )
+        return _resolve_azure_foundry_runtime(requested_provider=requested_provider, model_cfg=model_cfg,
                                               explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url,
                                               target_model=target_model)
     if requested_provider in _VERTEX_NAMES:
@@ -827,6 +906,9 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
     _raise_if_provider_disabled(requested_provider)
+    canonical_provider = auth_mod._plugin_aliases().get(requested_provider, requested_provider)
+    if canonical_provider != requested_provider and not has_named_custom_provider(requested_provider):
+        _raise_if_provider_disabled(canonical_provider)
     return next(r for r in _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, target_model) if r)
 
 

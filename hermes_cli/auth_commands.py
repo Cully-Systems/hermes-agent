@@ -78,7 +78,12 @@ _PROVIDER_ALIASES = {
 
 def _normalize_provider(provider: str) -> str:
     normalized = (provider or "").strip().lower()
-    return _PROVIDER_ALIASES.get(normalized) or _resolve_custom_provider_input(normalized) or normalized
+    return (
+        _PROVIDER_ALIASES.get(normalized)
+        or _resolve_custom_provider_input(normalized)
+        or auth_mod._plugin_aliases().get(normalized)
+        or normalized
+    )
 
 
 def _migrate_legacy_custom_pool_key(provider: str, legacy_key: str) -> None:
@@ -386,7 +391,7 @@ def auth_list_command(args) -> None:
     else:
         credential_pool = auth_mod._load_auth_store().get("credential_pool")
         providers = sorted({
-            *PROVIDER_REGISTRY.keys(), "openrouter", *list_custom_pool_providers(),
+            *(cfg.id for cfg in auth_mod.iter_unique_provider_configs()), "openrouter", *list_custom_pool_providers(),
             *(e["provider_key"] for e in _get_custom_provider_entries() if e["provider_key"]),
             *(credential_pool.keys() if isinstance(credential_pool, dict) else ())})
     for provider in providers:
@@ -508,9 +513,15 @@ def _print_azure_entra_status() -> None:
         from hermes_cli.config import load_config
         cfg = load_config()
         model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
-        if not isinstance(model_cfg, dict) or (
-            str(model_cfg.get("provider") or "").strip().lower() != "azure-foundry"
-            or str(model_cfg.get("auth_mode") or "").strip().lower() != "entra_id"):
+        if not isinstance(model_cfg, dict):
+            return
+        raw_provider = str(model_cfg.get("provider") or "").strip().lower()
+        try:
+            from hermes_cli.runtime_provider import has_named_custom_provider
+            provider = raw_provider if has_named_custom_provider(raw_provider) else auth_mod._plugin_aliases().get(raw_provider, raw_provider)
+        except Exception:
+            provider = auth_mod._plugin_aliases().get(raw_provider, raw_provider)
+        if provider != "azure-foundry" or str(model_cfg.get("auth_mode") or "").strip().lower() != "entra_id":
             return
         from agent.azure_identity_adapter import (
             EntraIdentityConfig, SCOPE_AI_AZURE_DEFAULT, describe_active_credential, has_azure_identity_installed,

@@ -917,6 +917,28 @@ def normalize_provider(provider: Optional[str]) -> str:
     """Normalize provider aliases to canonical ids. ``"auto"`` passes through — use
     ``hermes_cli.auth.resolve_provider()`` to resolve it from credentials."""
     normalized = (provider or "openrouter").strip().lower()
+    # A configured named endpoint owns its identifier before a discovered profile
+    # alias can claim the same spelling (for example providers.azure vs the
+    # bundled Azure Foundry profile's `azure` alias).
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        if _get_named_custom_provider(normalized):
+            return normalized
+    except Exception:
+        pass
+    # Discovered model-provider profiles use last-registration-wins for aliases,
+    # including aliases that overlap this static compatibility table (for example
+    # a user plugin claiming ``azure``). Preserve that identity for catalogs and
+    # cache keys before applying the built-in fallback.
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(normalized)
+        if profile and (normalized == profile.name or (profile.name != "custom" and normalized in profile.aliases)):
+            return profile.name
+    except Exception:
+        pass
     return _PROVIDER_ALIASES.get(normalized, normalized)
 
 
@@ -1269,11 +1291,40 @@ def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
     curated entries stop polluting the top. Plugin providers without a static entry use the
     profile's ``fallback_models`` as the curated list (Fireworks lists an image model first).
     """
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        custom = _get_named_custom_provider(normalized)
+    except Exception:
+        custom = None
+    if custom:
+        try:
+            from hermes_cli.runtime_provider_custom import _resolve_named_custom_runtime
+
+            runtime = _resolve_named_custom_runtime(requested_provider=normalized)
+        except Exception:
+            runtime = None
+        if runtime:
+            base_url = str(runtime.get("base_url") or "").strip()
+            api_key = runtime.get("api_key") or ""
+            if callable(api_key):
+                try:
+                    api_key = api_key()
+                except Exception:
+                    api_key = ""
+            live = fetch_api_models(
+                str(api_key or ""), base_url, api_mode=runtime.get("api_mode"),
+                headers=runtime.get("extra_headers"),
+            )
+            return live or None
+
     from providers import get_provider_profile
 
     profile = get_provider_profile(normalized)
-    if not (profile and profile.auth_type == "api_key" and profile.base_url):
+    if not profile:
         return None
+    if profile.auth_type != "api_key":
+        return list(profile.fallback_models) if profile.fallback_models else None
     api_key, base_url = _api_key_credentials(normalized)
     live = profile.fetch_models(api_key=api_key, base_url=base_url or profile.base_url or None) if api_key else None
     if not live:
@@ -1394,12 +1445,42 @@ def _credential_fingerprint(provider: str) -> str:
     credential files (OAuth re-auth busts the cache without parsing every file shape)."""
     import hashlib
 
+    def _secret_fingerprint(value: Any) -> str:
+        # Use a slow KDF for secret-bearing inputs so the persisted cache marker
+        # is stable but cannot act as a fast offline credential verifier.
+        return hashlib.scrypt(
+            str(value or "").encode("utf-8", errors="replace"),
+            salt=b"hermes-provider-catalog-cache-v1", n=2**12, r=8, p=1, dklen=16,
+        ).hex()
+
     # Keyless providers serve the catalog anonymously: nothing the user rotates should invalidate
     # the entry, so a stable fingerprint keeps the SWR cache alive and busts only on TTL expiry.
     if (provider or "").strip().lower() in _KEYLESS_STABLE_CACHE_PROVIDERS:
         return "keyless:" + (provider or "").strip().lower()
 
     parts: list[str] = []
+    try:
+        from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+
+        named = _get_named_custom_provider(provider)
+        if named:
+            key_env = str(named.get("key_env") or "").strip()
+            parts.extend([
+                f"named_custom.base_url={named.get('base_url', '')}",
+                f"named_custom.api_key={_secret_fingerprint(named.get('api_key', ''))}",
+                f"named_custom.key_env={key_env}",
+                "named_custom.key_env_value="
+                + _secret_fingerprint(os.environ.get(key_env, "") if key_env else ""),
+                f"named_custom.key_cmd={named.get('key_cmd', '')}",
+                f"named_custom.api_mode={named.get('api_mode', '')}",
+                "named_custom.extra_headers="
+                + _secret_fingerprint(json.dumps(named.get("extra_headers", {}), sort_keys=True, default=str)),
+            ])
+            # Host-gated fallback keys can also authenticate a named endpoint.
+            for key_name in ("CUSTOM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+                parts.append(f"{key_name}={_secret_fingerprint(os.environ.get(key_name, ''))}")
+    except Exception:
+        pass
     try:
         from hermes_cli.auth import PROVIDER_REGISTRY
         pcfg = PROVIDER_REGISTRY.get(provider)

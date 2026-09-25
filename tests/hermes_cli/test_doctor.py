@@ -599,6 +599,45 @@ def test_run_doctor_flags_missing_credentials_for_active_openrouter_provider(mon
     assert "No credentials found for provider 'openrouter'." in out
 
 
+def test_doctor_custom_provider_pool_check_does_not_rotate_round_robin_credentials(monkeypatch):
+    """A readiness check must not consume the next runtime credential."""
+    from agent.credential_pool import CredentialPool, PooledCredential, STRATEGY_ROUND_ROBIN
+    from hermes_cli import runtime_provider
+
+    pool_key = "custom:doctor-test"
+    pool = CredentialPool(pool_key, [
+        PooledCredential.from_dict(pool_key, {
+            "id": "first", "label": "first", "priority": 0,
+            "access_token": "first-test-secret", "source": "manual",
+        }),
+        PooledCredential.from_dict(pool_key, {
+            "id": "second", "label": "second", "priority": 1,
+            "access_token": "second-test-secret", "source": "manual",
+        }),
+    ])
+    pool._strategy = STRATEGY_ROUND_ROBIN
+    persisted = []
+    monkeypatch.setattr(pool, "_persist", lambda **kwargs: persisted.append(kwargs))
+    monkeypatch.setattr(runtime_provider, "custom_provider_pool_key_candidates", lambda *_a, **_kw: [pool_key])
+    monkeypatch.setattr(runtime_provider, "load_pool", lambda _key: pool)
+    provider_def = SimpleNamespace(
+        id=pool_key, source="user-config", api_key_env_vars=(), base_url="https://custom.example/v1",
+    )
+    config = {"providers": {"doctor-test": {
+        "provider_key": "doctor-test", "base_url": "https://custom.example/v1",
+    }}}
+
+    assert doctor_config._provider_has_credentials("custom", provider_def, config)
+    assert [entry.id for entry in pool.entries()] == ["first", "second"]
+    assert persisted == []
+
+    # A real request still begins at the same first credential; only the runtime
+    # selection path is allowed to rotate and persist the round-robin pool.
+    assert pool.select().id == "first"
+    assert [entry.id for entry in pool.entries()] == ["second", "first"]
+    assert persisted
+
+
 @pytest.mark.parametrize(
     ("provider", "default_model"),
     [

@@ -9,6 +9,71 @@ end-to-end persist/resume round-trip.
 """
 
 import hermes_cli.runtime_provider as rp
+from hermes_cli.providers import resolve_provider_full
+
+
+def test_legacy_custom_provider_alias_wins_over_plugin_registry_alias():
+    resolved = resolve_provider_full(
+        "claude",
+        user_providers={},
+        custom_providers=[
+            {"name": "claude", "base_url": "https://private.example/v1", "key_env": "PRIVATE_CLAUDE_KEY"}
+        ],
+    )
+
+    assert resolved is not None
+    assert resolved.id == "custom:claude"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "user-config"
+
+
+def test_legacy_custom_provider_cannot_shadow_canonical_builtin():
+    resolved = resolve_provider_full(
+        "anthropic",
+        user_providers={},
+        custom_providers=[
+            {"name": "anthropic", "base_url": "https://private.example/v1"}
+        ],
+    )
+
+    assert resolved is not None
+    assert resolved.id == "anthropic"
+    assert resolved.source != "user-config"
+    assert resolved.base_url != "https://private.example/v1"
+
+
+def test_legacy_custom_provider_resolves_when_no_builtin_matches():
+    custom = {"name": "local", "base_url": "https://private.example/v1"}
+
+    resolved = resolve_provider_full("custom:local", user_providers={}, custom_providers=[custom])
+
+    assert resolved is not None
+    assert resolved.id == "custom:local"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "user-config"
+
+
+def test_plugin_profile_can_override_builtin_alias_resolution(monkeypatch):
+    import providers as plugin_registry
+    from types import SimpleNamespace
+
+    profile = SimpleNamespace(
+        name="private-azure",
+        display_name="Private Azure",
+        api_mode="chat_completions",
+        env_vars=("PRIVATE_AZURE_KEY",),
+        base_url="https://private.example/v1",
+        auth_type="api_key",
+    )
+    monkeypatch.setattr(plugin_registry, "get_provider_profile",
+                        lambda provider: profile if provider == "azure" else None)
+
+    resolved = resolve_provider_full("azure", user_providers={}, custom_providers=[])
+
+    assert resolved is not None
+    assert resolved.id == "private-azure"
+    assert resolved.base_url == "https://private.example/v1"
+    assert resolved.source == "plugin-profile"
 
 
 def test_matches_legacy_custom_providers_list(monkeypatch):

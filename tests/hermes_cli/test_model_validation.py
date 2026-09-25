@@ -372,6 +372,7 @@ class TestAzureFoundryModelApiMode:
         assert azure_foundry_model_api_mode("gpt-3.5-turbo") is None
 
 
+
 # -- validate — format checks -----------------------------------------------
 
 class TestValidateFormatChecks:

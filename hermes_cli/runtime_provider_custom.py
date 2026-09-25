@@ -327,9 +327,14 @@ def is_routable_provider(provider: Optional[str]) -> bool:
 
 
 def _try_resolve_from_custom_pool(
-    base_url: str, provider_label: str, api_mode_override: Optional[str] = None, provider_name: Optional[str] = None
+    base_url: str, provider_label: str, api_mode_override: Optional[str] = None, provider_name: Optional[str] = None,
+    *, read_only: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Runtime dict from the first credential pool that owns this custom endpoint, else None."""
+    """Runtime dict from the first credential pool that owns this custom endpoint, else None.
+
+    ``read_only`` is for configuration diagnostics: inspect stored entries without
+    selecting a runtime credential, since round-robin selection persists rotation.
+    """
     rp = _rp()
     try:
         raw_keys = list(rp.custom_provider_pool_key_candidates(base_url, provider_name))
@@ -340,7 +345,11 @@ def _try_resolve_from_custom_pool(
     for pool_key in candidates:
         try:
             pool = rp.load_pool(pool_key)
-            entry = pool.select() if pool.has_credentials() else None
+            if read_only:
+                entry = next((candidate for candidate in pool.entries()
+                              if rp._pool_entry_api_key(candidate)), None)
+            else:
+                entry = pool.select() if pool.has_credentials() else None
             pool_api_key = rp._pool_entry_api_key(entry) if entry is not None else ""
             if not pool_api_key:
                 continue

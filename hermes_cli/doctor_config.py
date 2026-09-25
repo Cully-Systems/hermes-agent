@@ -195,9 +195,45 @@ _VENDOR_SLUG_PROVIDERS = {
 }
 
 
-def _provider_has_credentials(runtime_provider: str) -> bool:
+def _provider_has_credentials(runtime_provider: str, provider_def=None, config: dict | None = None) -> bool:
     """Only API-key providers in PROVIDER_REGISTRY are checked — OAuth/SDK/custom providers have their own
     checks elsewhere, and get_auth_status() returns a bare {logged_in: False} for anything it doesn't dispatch."""
+    if provider_def is not None and getattr(provider_def, "source", "") == "user-config":
+        # A raw user-config provider may share an alias with a built-in provider (for example
+        # ``azure`` -> Azure Foundry). Its credentials belong to its own definition, not that alias.
+        from hermes_cli.config import get_env_value
+        if any(str(get_env_value(name) or "").strip() for name in provider_def.api_key_env_vars):
+            return True
+        user_providers = (config or {}).get("providers")
+        entry = {}
+        if isinstance(user_providers, dict):
+            from hermes_cli.providers import custom_provider_slug
+            entry = next((candidate for name, candidate in user_providers.items()
+                          if isinstance(candidate, dict)
+                          and (str(name).strip().lower() == provider_def.id.strip().lower()
+                               or custom_provider_slug(name, candidate.get("provider_key") or name) == provider_def.id)), {})
+        legacy_providers = (config or {}).get("custom_providers")
+        if isinstance(legacy_providers, list):
+            from hermes_cli.providers import custom_provider_slug
+            entry = next((candidate for candidate in legacy_providers
+                          if isinstance(candidate, dict)
+                          and custom_provider_slug(candidate.get("name") or "", candidate.get("provider_key") or "") == provider_def.id), entry)
+        if str(entry.get("api_key") or "").strip() or str(entry.get("key_cmd") or "").strip():
+            return True
+        base_url = str(entry.get("api") or entry.get("base_url") or entry.get("url") or provider_def.base_url or "").strip()
+        if base_url:
+            # Custom provider keys can live in the credential pool instead of config.
+            # Reuse the runtime's local pool lookup contract without invoking key_cmd.
+            try:
+                from hermes_cli.runtime_provider import _try_resolve_from_custom_pool
+                provider_name = str(entry.get("provider_key") or provider_def.id.removeprefix("custom:") or "")
+                if _try_resolve_from_custom_pool(
+                    base_url, "custom", provider_name=provider_name, read_only=True,
+                ):
+                    return True
+            except Exception:
+                pass
+        return False
     if runtime_provider == "openrouter":
         from hermes_cli.config import get_env_value
         return any(str(get_env_value(k) or "").strip() for k in ("OPENROUTER_API_KEY", "OPENAI_API_KEY"))
@@ -227,10 +263,13 @@ def _validate_model_config(config_path, issues: list) -> None:
         except Exception:
             continue
     runtime_provider = catalog_provider = provider
+    provider_def = None
     if provider and provider not in {"auto", "custom"}:
+        auth_resolution_succeeded = False
         if resolve_auth is not None:
             try:
                 runtime_provider = resolve_auth(provider)
+                auth_resolution_succeeded = True
                 accept.add(runtime_provider)
             except Exception:
                 runtime_provider = provider
@@ -238,6 +277,16 @@ def _validate_model_config(config_path, issues: list) -> None:
             provider_def = resolve_full(provider, cfg.get("providers"), custom_providers)
             catalog_provider = provider_def.id if provider_def is not None else None
             accept.update({catalog_provider} - {None})
+            # The user-configured endpoint matched the raw provider name before
+            # plugin aliases. Keep that custom identity for auth checks too.
+            if provider_def is not None and provider_def.source == "user-config":
+                if (not auth_resolution_succeeded or provider != runtime_provider
+                        or provider == "custom" or provider.startswith("custom:")):
+                    runtime_provider = provider_def.id
+                else:
+                    # Exact canonical built-in names are not shadowed by custom
+                    # definitions at runtime; keep their built-in auth path too.
+                    provider_def = None
     if provider and provider != "auto" and (catalog_provider is None or (known_providers and not (accept & valid_provider_ids))):
         known_list = ", ".join(sorted(known_providers)) if known_providers else "(unavailable)"
         _fail_and_issue(f"model.provider '{provider_raw}' is not a recognised provider", f"(known: {known_list})",
@@ -253,7 +302,7 @@ def _validate_model_config(config_path, issues: list) -> None:
     if runtime_provider and runtime_provider not in ("auto", "custom"):
         from hermes_cli.doctor import _DHH
         with warn_on_error(""):
-            if not _provider_has_credentials(runtime_provider):
+            if not _provider_has_credentials(runtime_provider, provider_def, cfg):
                 _fail_and_issue(f"model.provider '{runtime_provider}' is set but no API key is configured",
                                 "(check ~/.hermes/.env or run 'hermes setup')",
                                 f"No credentials found for provider '{runtime_provider}'. Run 'hermes setup' or set the provider's "

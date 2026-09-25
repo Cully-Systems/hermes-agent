@@ -58,6 +58,10 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
     "alibaba-coding-plan": HermesOverlay(base_url_env_var="ALIBABA_CODING_PLAN_BASE_URL"),
     "vercel": HermesOverlay(is_aggregator=True),
     "opencode": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_ZEN_BASE_URL"),
+    # The plugin owns the ``opencode-zen`` identity and its aliases. Keep the
+    # built-in aggregator classification on that canonical plugin id too, so
+    # flat model catalogs remain discoverable after plugin-first normalization.
+    "opencode-zen": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_ZEN_BASE_URL"),
     "opencode-go": HermesOverlay(is_aggregator=True, base_url_env_var="OPENCODE_GO_BASE_URL"),
     "opencode-free": HermesOverlay(is_aggregator=True, base_url_override="https://opencode.ai/zen/v1", keyless=True),
     "kilo": HermesOverlay(is_aggregator=True, base_url_env_var="KILOCODE_BASE_URL"),
@@ -135,6 +139,7 @@ _ALIAS_GROUPS: Dict[str, Tuple[str, ...]] = {
     "nebius-token-factory": ("nebius", "nebius-tokenfactory", "nebius-tf", "token-factory", "tokenfactory"),
     "lmstudio": ("lmstudio", "lm-studio", "lm_studio"), "custom": ("ollama",),
     "local": ("vllm", "llamacpp", "llama.cpp", "llama-cpp"),
+    "azure-foundry": ("azure", "azure-ai-foundry", "azure-ai"),
 }
 ALIASES: Dict[str, str] = {alias: canon for canon, aliases in _ALIAS_GROUPS.items() for alias in aliases}
 
@@ -148,6 +153,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "nebius-token-factory": "Nebius Token Factory", "tencent-tokenplan": "Tencent TokenPlan", "lmstudio": "LM Studio",
     "local": "Local endpoint", "bedrock": "AWS Bedrock", "vertex": "Google Vertex AI", "ollama-cloud": "Ollama Cloud",
     "xai-oauth": "xAI Grok OAuth (SuperGrok / Premium+)", "opencode-free": "OpenCode Free",
+    "azure-foundry": "Azure Foundry",
 }
 
 
@@ -164,6 +170,17 @@ TRANSPORT_TO_API_MODE: Dict[str, str] = {
 def normalize_provider(name: str) -> str:
     """Resolve aliases and normalise casing to a canonical provider id."""
     key = name.strip().lower()
+    # Provider profiles have later-registration-wins semantics. Resolve their
+    # alias owner before applying the static fallback table so plugin aliases
+    # stay consistent across runtime, picker, catalog, and doctor surfaces.
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(key)
+        if profile and (key == profile.name or key in profile.aliases):
+            return profile.name
+    except Exception:
+        pass
     return ALIASES.get(key, key)
 
 
@@ -188,7 +205,14 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     Hermes-only overlay (nous, openai-codex, …); plugin provider profiles with a concrete endpoint."""
     canonical = normalize_provider(name)
     mdev_info = _models_dev_info(canonical, allow_network)
-    overlay = HERMES_OVERLAYS.get(canonical)
+    # Plugin profiles may claim a legacy provider's canonical id (for example
+    # ``ai-gateway`` owns the ``vercel`` alias and ``kilocode`` owns ``kilo``).
+    # Keep the Hermes-only metadata attached to that identity after profile-first
+    # normalization instead of silently dropping aggregator and endpoint settings.
+    direct_overlay = HERMES_OVERLAYS.get(canonical)
+    legacy_id = ALIASES.get(canonical, "")
+    inherited_overlay = direct_overlay is None and legacy_id in HERMES_OVERLAYS
+    overlay = direct_overlay or (HERMES_OVERLAYS.get(legacy_id) if inherited_overlay else None)
     if mdev_info is not None:
         ov = overlay or HermesOverlay()
         env_vars = list(mdev_info.env)
@@ -197,23 +221,31 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
                 env_vars.append(ev)
         return _overlay_pdef(canonical, ov, mdev_info.name, tuple(env_vars), ov.base_url_override or mdev_info.api,
                              mdev_info.doc, "models.dev")
-    if overlay is not None:
+    if overlay is not None and not inherited_overlay:
         return _overlay_pdef(canonical, overlay, _LABEL_OVERRIDES.get(canonical, canonical), overlay.extra_env_vars,
                              overlay.base_url_override, "", "hermes")
-    # Plugin-registered profiles (plugins/model-providers/<name>/) absent from models.dev and
-    # HERMES_OVERLAYS would otherwise be "Unknown provider" in /model, --provider and model-switch
-    # even though the picker lists them. Only profiles with a concrete endpoint resolve here:
-    # placeholder profiles like ``custom`` (aliases ollama/local/vllm) ship an empty base_url and
-    # are completed by config.yaml custom_providers — resolving them would preempt
-    # resolve_provider_full's custom step and collapse keyed ``custom:<name>`` ids to bare custom.
+    # Plugin-registered profiles absent from models.dev and HERMES_OVERLAYS still own their
+    # identity when the endpoint is dynamic or the transport is non-HTTP. The generic ``custom``
+    # placeholder is the exception: its endpoint comes from custom_providers and resolving it
+    # here would collapse keyed ``custom:<name>`` ids to bare custom.
     try:
         from providers import get_provider_profile as _profile
         _prof = _profile(canonical)
-        if _prof is not None and (_prof.base_url or "").strip():
+        if _prof is not None and _prof.name != "custom":
             _api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
+            profile_env = list(_prof.env_vars or ())
+            active_overlay = overlay or HermesOverlay()
+            for env_var in active_overlay.extra_env_vars:
+                if env_var not in profile_env:
+                    profile_env.append(env_var)
+            profile_transport = _api_mode_to_transport.get(_prof.api_mode, "openai_chat")
+            transport = (active_overlay.transport if active_overlay.transport != "openai_chat"
+                         else profile_transport)
             return ProviderDef(id=canonical, name=_prof.display_name or _prof.name or canonical,
-                               transport=_api_mode_to_transport.get(_prof.api_mode, "openai_chat"),
-                               api_key_env_vars=tuple(_prof.env_vars or ()), base_url=_prof.base_url or "",
+                               transport=transport, api_key_env_vars=tuple(profile_env),
+                               base_url=active_overlay.base_url_override or _prof.base_url or "",
+                               base_url_env_var=active_overlay.base_url_env_var,
+                               is_aggregator=active_overlay.is_aggregator,
                                auth_type=_prof.auth_type or "api_key", source="plugin-profile")
     except Exception:
         pass
@@ -243,7 +275,8 @@ def is_aggregator(provider: str) -> bool:
 # ``vendor/model`` routing slugs — model_switch searches their flat catalog on that flag. But they
 # are NOT routing aggregators: every listed model is first-party under their own subscription, so
 # picker dedup (build_models_payload) must not strip a reseller's "minimax-m3" just because a
-# user's custom proxy serves a same-named model. Normalized ids: "opencode-zen" -> "opencode".
+# user's custom proxy serves a same-named model. Zen may normalize to either
+# ``opencode`` or ``opencode-zen`` depending on plugin identity availability.
 _FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset({"opencode-go", "opencode"})
 
 
@@ -252,7 +285,7 @@ def is_routing_aggregator(provider: str) -> bool:
     flat-namespace resellers whose catalog is first-party. Use for "would selecting this model
     silently re-route away from the intended provider?" (picker dedup)."""
     provider_norm = normalize_provider(provider or "")
-    if provider_norm in _FLAT_NAMESPACE_RESELLERS:
+    if provider_norm in _FLAT_NAMESPACE_RESELLERS or provider_norm == "opencode-zen":
         return False
     return is_aggregator(provider_norm)
 
@@ -455,21 +488,49 @@ def resolve_provider_full(name: str, user_providers: Optional[Dict[str, Any]] = 
         user_pdef = resolve_user_provider(raw, user_providers)
         if user_pdef is not None:
             return user_pdef
+    # Legacy custom_providers entries intentionally take precedence over built-in
+    # aliases, just like providers.<name> entries and runtime custom resolution.
+    # Resolve them before consulting PROVIDER_REGISTRY, where plugin aliases can
+    # make the alias appear to be a built-in identity.
+    custom_pdef = resolve_custom_provider(name, custom_providers)
+    # A legacy entry may shadow a built-in alias, but not the canonical
+    # built-in identity itself. Runtime routing makes this same distinction.
+    if custom_pdef is not None and canonical != raw:
+        return custom_pdef
     if canonical != raw:
+        # Ask plugin discovery about the original alias before static Hermes
+        # aliases collapse it onto a bundled provider (e.g. Azure Foundry).
+        try:
+            from providers import get_provider_profile as _profile
+            profile = _profile(raw)
+            if profile is not None and profile.name != "custom":
+                api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
+                return ProviderDef(
+                    id=profile.name,
+                    name=profile.display_name or profile.name or raw,
+                    transport=api_mode_to_transport.get(profile.api_mode, "openai_chat"),
+                    api_key_env_vars=tuple(profile.env_vars or ()),
+                    base_url=profile.base_url or "",
+                    auth_type=profile.auth_type or "api_key",
+                    source="plugin-profile",
+                )
+        except Exception:
+            pass
         pdef = _lossy_alias_registry_pdef(raw, canonical)
         if pdef is not None:
             return pdef
     pdef = get_provider(canonical)
     if pdef is not None:
         return pdef
+    # If the legacy entry could not shadow a recognized built-in above, keep
+    # it as the fallback for ordinary custom names and explicit custom: ids.
+    if custom_pdef is not None:
+        return custom_pdef
     if user_providers:
         for candidate in (canonical, raw):
             user_pdef = resolve_user_provider(candidate, user_providers)
             if user_pdef is not None:
                 return user_pdef
-    custom_pdef = resolve_custom_provider(name, custom_providers)
-    if custom_pdef is not None:
-        return custom_pdef
     if raw in ("llamacpp", "llama.cpp", "llama-cpp"):
         pdef = _llamacpp_pdef()
         if pdef is not None:

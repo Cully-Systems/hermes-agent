@@ -64,3 +64,26 @@ def test_list_providers_dedupes_aliases_in_cached_snapshot():
 
     assert providers.get_provider_profile("moonshot") is profile
     assert providers.list_providers() == [profile]
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "legacy_id", "base_url_env_var"),
+    [
+        ("ai-gateway", "vercel", ""),
+        ("kilocode", "kilo", "KILOCODE_BASE_URL"),
+    ],
+)
+def test_profile_first_normalization_keeps_legacy_hermes_overlay(provider_id, legacy_id, base_url_env_var):
+    from hermes_cli.providers import get_provider, is_aggregator
+
+    profile = providers.get_provider_profile(provider_id)
+    assert profile is not None
+    assert providers.get_provider_profile(legacy_id) is profile
+
+    provider = get_provider(provider_id, allow_network=False)
+    assert provider is not None
+    assert provider.id == profile.name
+    assert provider.is_aggregator
+    assert provider.base_url_env_var == base_url_env_var
+    assert provider.base_url == profile.base_url
+    assert is_aggregator(provider_id)
